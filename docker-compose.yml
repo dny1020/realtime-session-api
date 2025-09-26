@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # ------------------------------
+  # PostgreSQL Database
+  # ------------------------------
+  postgres:
+    image: postgres:15.5-alpine
+    container_name: contactcenter_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal-net
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
+  # ------------------------------
+  # FastAPI - Contact Center API
+  # ------------------------------
+  api:
+    build: .
+    container_name: contactcenter_api
+    # No host port exposure; access via Traefik only
+    environment:
+      - APP_NAME=${APP_NAME}
+      - APP_VERSION=${APP_VERSION}
+      - DEBUG=${DEBUG}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - DISABLE_DB=${DISABLE_DB:-false}
+      - ARI_HTTP_URL=${ARI_HTTP_URL}
+      - ARI_USERNAME=${ARI_USERNAME}
+      - ARI_PASSWORD=${ARI_PASSWORD}
+      - ARI_APP=${ARI_APP}
+      - DEFAULT_CONTEXT=${DEFAULT_CONTEXT}
+      - DEFAULT_EXTENSION=${DEFAULT_EXTENSION}
+      - DEFAULT_PRIORITY=${DEFAULT_PRIORITY}
+      - DEFAULT_TIMEOUT=${DEFAULT_TIMEOUT}
+      - DEFAULT_CALLER_ID=${DEFAULT_CALLER_ID}
+      - ALGORITHM=${ALGORITHM}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
+      - JWT_ISSUER=${JWT_ISSUER:-}
+      - JWT_AUDIENCE=${JWT_AUDIENCE:-}
+      - METRICS_ENABLED=${METRICS_ENABLED:-true}
+      - DOCS_ENABLED=${DOCS_ENABLED:-false}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - WORKERS=${WORKERS:-1}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      asterisk:
+        condition: service_started
+    volumes:
+      - ./uploads:/app/uploads
+      - ./audio:/app/audio
+      - ./logs:/app/logs
+    networks:
+      - internal-net
+      - public-net
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`${API_HOST}`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.tls.certresolver=le"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.api.middlewares=api-sec-headers@docker"
+      - "traefik.http.routers.api-redirect.rule=Host(`${API_HOST}`)"
+      - "traefik.http.routers.api-redirect.entrypoints=web"
+      - "traefik.http.routers.api-redirect.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.api-sec-headers.headers.stsSeconds=63072000"
+      - "traefik.http.middlewares.api-sec-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.api-sec-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.api-sec-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.api-sec-headers.headers.referrerPolicy=no-referrer"
+      - "traefik.http.middlewares.api-sec-headers.headers.frameDeny=true"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ------------------------------
+  # Prometheus for metrics
+  # ------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: contactcenter_prometheus
+    # No host port exposure; reachable via internal network or Traefik if configured
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - internal-net
+    restart: unless-stopped
+
+  # ------------------------------
+  # Grafana for visualization
+  # ------------------------------
+  grafana:
+    image: grafana/grafana:10.4.5
+    container_name: contactcenter_grafana
+    # No host port exposure; route via Traefik if desired
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - internal-net
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  # ------------------------------
+  # Traefik reverse proxy
+  # ------------------------------
+  traefik:
+    image: traefik:v2.11
+    container_name: contactcenter_traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --accesslog=true
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/letsencrypt:/letsencrypt
+    networks:
+      - public-net
+      - internal-net
+    restart: unless-stopped
+    # No public dashboard labels
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+
+networks:
+  public-net:
+    driver: bridge
+  internal-net:
+    driver: bridge
+    internal: true

@@ -1,0 +1,95 @@
+############################
+# Environment files
+############################
+.env
+.env.*
+!.env.example
+
+############################
+# OS / Editors
+############################
+.DS_Store
+.vscode/
+.idea/
+
+############################
+# Python
+############################
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.tox/
+.nox/
+.cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+dist/
+site/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+############################
+# Notebooks
+############################
+.ipynb_checkpoints/
+
+############################
+# Node (if present)
+############################
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+############################
+# Logs / Temp / Data
+############################
+*.log
+logs/
+tmp/
+
+# Local databases / dumps
+*.sqlite*
+db.sqlite
+*.db
+*.sql
+
+############################
+# Docker / Compose
+############################
+docker-compose.override.yml
+docker-compose.local.yml
+
+############################
+# Asterisk runtime (keep configs tracked)
+############################
+asterisk/logs/
+asterisk/voicemail/
+asterisk/keys/
+asterisk/certs/
+
+############################
+# Traefik ACME store
+############################
+traefik/letsencrypt/
+
+############################
+# Monitoring / Grafana data (keep configs)
+############################
+monitoring/data/
+grafana/data/

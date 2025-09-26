@@ -1,0 +1,86 @@
+# ---- VCS ----
+.git
+.gitignore
+
+# ---- OS / Editors ----
+.DS_Store
+.vscode/
+.idea/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.tox/
+.cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+site/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Package managers / caches
+pip-wheel-metadata/
+pip-cache/
+
+# ---- Node (if present) ----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Environment files & overrides ----
+.env
+.env.*
+!.env.example
+
+# ---- Logs / Temp / Data ----
+*.log
+logs/
+tmp/
+
+# SQLite (dev only)
+*.sqlite*
+db.sqlite
+
+# SQL dumps
+*.sql
+
+# ---- Docker / Compose (local overrides) ----
+docker-compose.override.yml
+docker-compose.local.yml
+
+# ---- Asterisk runtime volumes (do not send to build) ----
+asterisk/logs/
+asterisk/voicemail/
+asterisk/keys/
+asterisk/certs/
+
+# Keep Asterisk configs for image builds
+!asterisk/conf/**
+!asterisk/Dockerfile
+
+# ---- Traefik secrets (ACME) ----
+traefik/letsencrypt/
+
+# ---- Monitoring data (keep configs) ----
+monitoring/data/
+grafana/data/
+
+# ---- Tests (not needed in production image) ----
+tests/
