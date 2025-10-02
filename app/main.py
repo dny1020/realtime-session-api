@@ -14,8 +14,54 @@ from app.routes import interaction
 from app.routes import auth as auth_routes
 from app.middleware.logging_middleware import JSONLoggingMiddleware
 from loguru import logger
+import uuid
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+import time
+from collections import defaultdict, deque
 
 settings = get_settings()
+
+
+PLACEHOLDER_SECRET_VALUES = {"your-secret-key-change-in-production", "CHANGE_ME_STRONG_HEX_64"}
+if settings.secret_key in PLACEHOLDER_SECRET_VALUES and not settings.debug:
+    raise RuntimeError("SECRET_KEY is a placeholder; set a strong value before running in production.")
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        # Attach to state for access in routes/logging
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+class SimpleRateLimitMiddleware(BaseHTTPMiddleware):
+    """Very simple in-memory rate limiter for sensitive endpoints like /api/v2/token.
+    Not distributed; for multi-instance deployments replace with Redis or Traefik plugin.
+    """
+
+    def __init__(self, app, limit: int = 10, window_seconds: int = 60):
+        super().__init__(app)
+        self.limit = limit
+        self.window = window_seconds
+        self.buckets: defaultdict[str, deque] = defaultdict(deque)
+        self.protected_paths = {"/api/v2/token"}
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in self.protected_paths:
+            ip = request.client.host if request.client else "unknown"
+            now = time.time()
+            bucket = self.buckets[ip]
+            # purge old
+            while bucket and now - bucket[0] > self.window:
+                bucket.popleft()
+            if len(bucket) >= self.limit:
+                return Response(status_code=429, content="Too Many Requests")
+            bucket.append(now)
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -74,6 +120,8 @@ app.add_middleware(
 
 # Logging middleware (structured JSON)
 app.add_middleware(JSONLoggingMiddleware)
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SimpleRateLimitMiddleware)
 
 # Include routes
 app.include_router(interaction.router, prefix="/api/v2", tags=["Interaction"])
