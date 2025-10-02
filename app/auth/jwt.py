@@ -70,7 +70,7 @@ def decode_token(token: str) -> TokenData:
 
 
 def get_user_by_username(db: Session, username: str) -> Optional[User]:
-    return db.query(User).filter(User.username == username, User.is_active == True).first()  # noqa: E712
+    return db.query(User).filter(User.username == username, User.is_active.is_(True)).first()
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> str:

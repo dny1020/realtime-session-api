@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     metrics_enabled: bool = Field(default=True, description="Enable Prometheus metrics")
     metrics_port: int = Field(default=8001, description="Port for metrics")
 
+    # Rate limiting
+    rate_limit_requests: int = Field(default=10, description="Rate limit requests per window")
+    rate_limit_window: int = Field(default=60, description="Rate limit window in seconds")
+
+    # Asterisk connection pooling
+    ari_max_keepalive: int = Field(default=20, description="Max keepalive connections to ARI")
+    ari_max_connections: int = Field(default=50, description="Max total connections to ARI")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

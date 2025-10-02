@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 import json
 import uuid
 from datetime import datetime
+from loguru import logger
 
 from app.database import get_db
 from app.services.asterisk import get_asterisk_service, AsteriskService
@@ -56,6 +57,26 @@ class CallCreate(CallRequest):
     phone_number: str = Field(..., description="Phone number to call")
 
 
+class CallStatusResponse(BaseModel):
+    """Response model for call status"""
+    call_id: str
+    phone_number: str
+    status: str
+    channel: Optional[str] = None
+    context: str
+    extension: str
+    caller_id: str
+    created_at: datetime
+    dialed_at: Optional[datetime] = None
+    answered_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration: Optional[int] = None
+    failure_reason: Optional[str] = None
+    attempt_number: int
+    is_active: bool
+    is_completed: bool
+
+
 @router.post("/interaction/{number}", response_model=CallResponse)
 async def originate_call(
     number: Annotated[str, Path(description="Phone number in E.164 or digits with optional +", min_length=7, max_length=20, pattern=r"^[+0-9]+$")],
@@ -95,8 +116,8 @@ async def originate_call(
                 # legacy + v2
                 CALLS_TOTAL.inc()
                 CALLS_V2.inc()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Metrics error: {e}")
 
         # Create call record in database (if DB enabled)
         if db is not None and not settings.disable_db:
@@ -118,8 +139,8 @@ async def originate_call(
             try:
                 CALLS_LAUNCHED.inc()
                 CALLS_LAUNCHED_V2.inc()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Metrics error: {e}")
 
         # Execute directly (no Celery/Workers in this version)
         start_t = time.perf_counter()
@@ -135,8 +156,8 @@ async def originate_call(
         if settings.metrics_enabled:
             try:
                 ORIGINATE_LATENCY_SECONDS.observe(time.perf_counter() - start_t)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Metrics error: {e}")
         
         if asterisk_result["success"]:
             # Update record with Asterisk information
@@ -149,8 +170,8 @@ async def originate_call(
                 try:
                     CALLS_SUCCESS.inc()
                     CALLS_SUCCESS_V2.inc()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Metrics error: {e}")
             
             return CallResponse(
                 success=True,
@@ -172,8 +193,8 @@ async def originate_call(
                 try:
                     CALLS_FAILED.inc()
                     CALLS_FAILED_V2.inc()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Metrics error: {e}")
             
             return CallResponse(
                 success=False,
@@ -192,8 +213,8 @@ async def originate_call(
             try:
                 CALLS_FAILED.inc()
                 CALLS_FAILED_V2.inc()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Metrics error: {e}")
         
         # Try to update call record as failed if it was created
         try:
@@ -211,7 +232,7 @@ async def originate_call(
         )
 
 
-@router.get("/interaction/{call_id}/status")
+@router.get("/interaction/{call_id}/status", response_model=CallStatusResponse)
 async def get_call_status(
     call_id: Annotated[str, Path(description="Call ID (UUID)", min_length=8, max_length=255)],
     db: Optional[Session] = Depends(get_db),
@@ -225,7 +246,7 @@ async def get_call_status(
         db: Database session
 
     Returns:
-        Dict with call status information
+        CallStatusResponse: Call status information
     """
     
     # Search call in database
@@ -239,28 +260,28 @@ async def get_call_status(
             detail="Call not found"
         )
     
-    return {
-        "call_id": db_call.call_id,
-        "phone_number": db_call.phone_number,
-        "status": db_call.status.value,
-        "channel": db_call.channel,
-        "context": db_call.context,
-        "extension": db_call.extension,
-        "caller_id": db_call.caller_id,
-        "created_at": db_call.created_at,
-        "dialed_at": db_call.dialed_at,
-        "answered_at": db_call.answered_at,
-        "ended_at": db_call.ended_at,
-        "duration": db_call.duration,
-        "failure_reason": db_call.failure_reason,
-        "attempt_number": db_call.attempt_number,
-        "is_active": db_call.is_active,
-        "is_completed": db_call.is_completed
-    }
+    return CallStatusResponse(
+        call_id=db_call.call_id,
+        phone_number=db_call.phone_number,
+        status=db_call.status.value,
+        channel=db_call.channel,
+        context=db_call.context,
+        extension=db_call.extension,
+        caller_id=db_call.caller_id,
+        created_at=db_call.created_at,
+        dialed_at=db_call.dialed_at,
+        answered_at=db_call.answered_at,
+        ended_at=db_call.ended_at,
+        duration=db_call.duration,
+        failure_reason=db_call.failure_reason,
+        attempt_number=db_call.attempt_number,
+        is_active=db_call.is_active,
+        is_completed=db_call.is_completed
+    )
 
 
 # Alias : GET /api/v2/status/{call_id}
-@router.get("/status/{call_id}")
+@router.get("/status/{call_id}", response_model=CallStatusResponse)
 async def get_call_status_alias(
     call_id: Annotated[str, Path(description="Call ID (UUID)", min_length=8, max_length=255)],
     db: Optional[Session] = Depends(get_db),
@@ -288,7 +309,7 @@ async def create_call(
     )
 
 
-@router.get("/calls/{call_id}", tags=["Calls"])
+@router.get("/calls/{call_id}", response_model=CallStatusResponse, tags=["Calls"])
 async def get_call(
     call_id: str,
     db: Session = Depends(get_db),

@@ -20,7 +20,10 @@ class AsteriskService:
     def _build_client(self) -> httpx.AsyncClient:
         # Configure sensible timeouts and connection limits
         timeout = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
-        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+        limits = httpx.Limits(
+            max_keepalive_connections=settings.ari_max_keepalive,
+            max_connections=settings.ari_max_connections
+        )
         return httpx.AsyncClient(
             base_url=settings.ari_http_url,
             auth=(settings.ari_username, settings.ari_password),

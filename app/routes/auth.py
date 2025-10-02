@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from typing import Optional
 
 from app.auth.jwt import create_access_token, verify_password
 from app.database import get_db
@@ -25,7 +26,7 @@ async def issue_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Sess
     if db is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="DB disabled")
 
-    user: User | None = db.query(User).filter(User.username == form_data.username, User.is_active == True).first()  # noqa: E712
+    user: Optional[User] = db.query(User).filter(User.username == form_data.username, User.is_active.is_(True)).first()
     if user is None or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 

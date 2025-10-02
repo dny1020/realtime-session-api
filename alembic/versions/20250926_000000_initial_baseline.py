@@ -54,8 +54,15 @@ def upgrade() -> None:
     op.create_index('ix_calls_created_at', 'calls', ['created_at'])
     op.create_index('ix_calls_status_created', 'calls', ['status', 'created_at'])
     op.create_index('ix_calls_unique_id', 'calls', ['unique_id'])
-    # Check constraints (implemented via triggers or app-level logic if dialect lacks direct support)
-    # For portability, enforce via application; optionally add partial constraints with dialect-specific DDL.
+    op.create_index('ix_users_created_at', 'users', ['created_at'])
+    
+    # Check constraints for data integrity
+    op.create_check_constraint('ck_calls_attempt_number_ge_1', 'calls', 'attempt_number >= 1')
+    op.create_check_constraint('ck_calls_max_attempts_ge_1', 'calls', 'max_attempts >= 1')
+    op.create_check_constraint('ck_calls_timeout_pos', 'calls', 'timeout > 0')
+    op.create_check_constraint('ck_calls_phone_number_len', 'calls', 
+                               "char_length(phone_number) >= 7 AND char_length(phone_number) <= 20")
+    op.create_check_constraint('ck_users_username_len', 'users', 'char_length(username) >= 3')
 
 
 def downgrade() -> None:

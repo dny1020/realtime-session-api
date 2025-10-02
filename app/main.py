@@ -40,13 +40,14 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 class SimpleRateLimitMiddleware(BaseHTTPMiddleware):
     """Very simple in-memory rate limiter for sensitive endpoints like /api/v2/token.
-    Not distributed; for multi-instance deployments replace with Redis or Traefik plugin.
+    WARNING: Not distributed; for multi-instance deployments replace with Redis or Traefik plugin.
     """
 
-    def __init__(self, app, limit: int = 10, window_seconds: int = 60):
+    def __init__(self, app, limit: Optional[int] = None, window_seconds: Optional[int] = None):
         super().__init__(app)
-        self.limit = limit
-        self.window = window_seconds
+        settings_obj = get_settings()
+        self.limit = limit if limit is not None else settings_obj.rate_limit_requests
+        self.window = window_seconds if window_seconds is not None else settings_obj.rate_limit_window
         self.buckets: defaultdict[str, deque] = defaultdict(deque)
         self.protected_paths = {"/api/v2/token"}
 

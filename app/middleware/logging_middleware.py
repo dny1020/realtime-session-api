@@ -41,9 +41,9 @@ class JSONLoggingMiddleware(BaseHTTPMiddleware):
                         REQUEST_COUNT.labels(method=method, path=path, status=str(status_code)).inc()
                         REQUEST_LATENCY.observe(elapsed)  # legacy, no labels
                         REQUEST_LATENCY_BY_METHOD.labels(method=method).observe(elapsed)
-                    except Exception:
+                    except Exception as e:
                         # Never break requests due to metrics errors
-                        pass
+                        logger.debug(f"Metrics error: {e}")
 
             # Structured JSON log
             log_entry = {

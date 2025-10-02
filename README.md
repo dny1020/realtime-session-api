@@ -18,7 +18,7 @@ Minimal Python (FastAPI) API to trigger single outbound calls through Asterisk, 
 * Docker (optional) → Packaging and deployment
 ### Scope:
   - Local: can run without a database by setting DISABLE_DB=true.
-  - Production: PostgreSQL required (SQLite not supported).
+ 
 
 ## Endpoints
   - POST /api/v2/interaction/{number} → Start a call to a number
@@ -100,6 +100,99 @@ Minimal Python (FastAPI) API to trigger single outbound calls through Asterisk, 
 1) Install dependencies
 2) Start FastAPI (UVicorn) and Asterisk with ARI available
 3) Get a token at `/api/v2/token` then call protected endpoints
+
+## API Usage Examples
+
+### Authentication
+Get a JWT token:
+```bash
+curl -X POST http://api.localhost/api/v2/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=your_username&password=your_password"
+```
+
+Response:
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
+}
+```
+
+### Originate a Call
+Make an outbound call to a phone number:
+```bash
+curl -X POST http://api.localhost/api/v2/interaction/+1234567890 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "context": "outbound-ivr",
+    "extension": "s",
+    "priority": 1,
+    "timeout": 30000,
+    "caller_id": "MyCompany"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "call_id": "550e8400-e29b-41d4-a716-446655440000",
+  "phone_number": "+1234567890",
+  "message": "Call originated successfully",
+  "channel": "Local/+1234567890@outbound-ivr",
+  "status": "dialing",
+  "created_at": "2025-10-01T12:00:00Z"
+}
+```
+
+### Check Call Status
+Query the status of an active or completed call:
+```bash
+curl -X GET http://api.localhost/api/v2/status/{call_id} \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Response:
+```json
+{
+  "call_id": "550e8400-e29b-41d4-a716-446655440000",
+  "phone_number": "+1234567890",
+  "status": "answered",
+  "channel": "Local/+1234567890@outbound-ivr",
+  "context": "outbound-ivr",
+  "extension": "s",
+  "caller_id": "MyCompany",
+  "created_at": "2025-10-01T12:00:00Z",
+  "dialed_at": "2025-10-01T12:00:01Z",
+  "answered_at": "2025-10-01T12:00:05Z",
+  "ended_at": null,
+  "duration": null,
+  "failure_reason": null,
+  "attempt_number": 1,
+  "is_active": true,
+  "is_completed": false
+}
+```
+
+### RESTful Endpoints
+Alternative RESTful approach:
+```bash
+# Create a call
+curl -X POST http://api.localhost/api/v2/calls \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone_number": "+1234567890",
+    "context": "outbound-ivr",
+    "caller_id": "MyCompany"
+  }'
+
+# Get call details
+curl -X GET http://api.localhost/api/v2/calls/{call_id} \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
 
 ## Metrics
 - Prometheus metrics at `/metrics` when enabled.

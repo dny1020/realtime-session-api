@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # ------------------------------
@@ -16,13 +16,24 @@ services:
     networks:
       - internal-net
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1" ]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 20s
     security_opt:
       - no-new-privileges:true
+
+  # ------------------------------
+  # NOTE: Asterisk service is not included in this docker-compose.
+  # Deploy Asterisk separately or add it here with proper configuration.
+  # The API expects Asterisk ARI to be available at ARI_HTTP_URL.
+  # Example service configuration can be found in the project documentation.
+  # ------------------------------
 
   # ------------------------------
   # FastAPI - Contact Center API
@@ -60,8 +71,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      asterisk:
-        condition: service_started
+      # asterisk dependency removed - deploy Asterisk separately
     volumes:
       - ./uploads:/app/uploads
       - ./audio:/app/audio
@@ -91,7 +101,7 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: [ "CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1" ]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -106,14 +116,15 @@ services:
     # No host port exposure; reachable via internal network or Traefik if configured
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=200h"
+      - "--web.enable-lifecycle"
     networks:
       - internal-net
     restart: unless-stopped
@@ -171,7 +182,6 @@ volumes:
   postgres_data:
   prometheus_data:
   grafana_data:
-
 
 networks:
   public-net:
