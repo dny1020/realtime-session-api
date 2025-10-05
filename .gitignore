@@ -1,95 +1,53 @@
-############################
-# Environment files
-############################
-.env
-.env.*
-!.env.example
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv
 
-############################
-# OS / Editors
-############################
-.DS_Store
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-############################
-# Python
-############################
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.so
-*.egg
-*.egg-info/
-.eggs/
-.pytest_cache/
-.mypy_cache/
-.tox/
-.nox/
-.cache/
-.ruff_cache/
-.coverage
-.coverage.*
-coverage.xml
-htmlcov/
-build/
-dist/
-site/
-pip-wheel-metadata/
+# OS
+.DS_Store
+Thumbs.db
 
-# Virtual environments
-.venv/
-venv/
-env/
-
-############################
-# Notebooks
-############################
-.ipynb_checkpoints/
-
-############################
-# Node (if present)
-############################
-node_modules/
-npm-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-############################
-# Logs / Temp / Data
-############################
+# Logs
 *.log
 logs/
-tmp/
 
-# Local databases / dumps
-*.sqlite*
-db.sqlite
+# Database
 *.db
-*.sql
+*.sqlite3
 
-############################
-# Docker / Compose
-############################
-docker-compose.override.yml
-docker-compose.local.yml
+# Uploads
+uploads/
+audio/
 
-############################
-# Asterisk runtime (keep configs tracked)
-############################
-asterisk/logs/
-asterisk/voicemail/
-asterisk/keys/
-asterisk/certs/
+# Docker
+*.pid
 
-############################
-# Traefik ACME store
-############################
+# Alembic
+alembic/versions/*.pyc
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Traefik
 traefik/letsencrypt/
-
-############################
-# Monitoring / Grafana data (keep configs)
-############################
-monitoring/data/
-grafana/data/

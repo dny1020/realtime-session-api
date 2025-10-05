@@ -1,9 +1,11 @@
 import uuid
 import json
 import asyncio
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Callable
 from loguru import logger
 import httpx
+import websockets
+from datetime import datetime
 
 from config.settings import get_settings
 
@@ -11,11 +13,14 @@ settings = get_settings()
 
 
 class AsteriskService:
-    """Service for interacting with Asterisk ARI (REST)."""
+    """Service for interacting with Asterisk ARI (REST + WebSocket)."""
 
     def __init__(self):
         self._client: Optional[httpx.AsyncClient] = None
+        self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._connected_ok: bool = False
+        self._ws_task: Optional[asyncio.Task] = None
+        self._event_handlers: Dict[str, Callable] = {}
 
     def _build_client(self) -> httpx.AsyncClient:
         # Configure sensible timeouts and connection limits
@@ -33,17 +38,23 @@ class AsteriskService:
         )
 
     async def connect(self) -> bool:
-        # For ARI over REST, "connect" can validate credentials with a lightweight GET
+        """Connect to ARI HTTP and WebSocket"""
         try:
+            # HTTP Client
             if self._client is None:
                 self._client = self._build_client()
             # Probe /applications to verify access
             resp = await self._client.get("/applications")
             ok = resp.status_code == 200
             self._connected_ok = ok
+            
+            if ok:
+                # Connect to WebSocket for events
+                await self._connect_websocket()
+            
             logger.info(
                 "ARI connectivity check",
-                extra={"ok": ok, "status": resp.status_code},
+                extra={"ok": ok, "status": resp.status_code, "websocket": self._ws is not None},
             )
             return self._connected_ok
         except Exception as e:
@@ -51,10 +62,80 @@ class AsteriskService:
             self._connected_ok = False
             return False
 
+    async def _connect_websocket(self):
+        """Connect to ARI WebSocket for real-time events"""
+        try:
+            # Build WebSocket URL from HTTP URL
+            ws_url = settings.ari_http_url.replace("http://", "ws://").replace("https://", "wss://")
+            ws_url = f"{ws_url}/events?app={settings.ari_app}&api_key={settings.ari_username}:{settings.ari_password}"
+            
+            self._ws = await websockets.connect(ws_url)
+            logger.info("WebSocket connected to ARI", extra={"url": ws_url})
+            
+            # Start listening for events
+            self._ws_task = asyncio.create_task(self._listen_events())
+        except Exception as e:
+            logger.error("Error connecting to WebSocket", extra={"error": str(e)})
+            self._ws = None
+
+    async def _listen_events(self):
+        """Listen for ARI events via WebSocket"""
+        if self._ws is None:
+            return
+        
+        try:
+            async for message in self._ws:
+                try:
+                    event = json.loads(message)
+                    event_type = event.get("type")
+                    
+                    logger.debug(f"ARI Event received: {event_type}", extra={"event": event})
+                    
+                    # Call registered handlers
+                    if event_type in self._event_handlers:
+                        await self._event_handlers[event_type](event)
+                    
+                    # Also call generic handler if registered
+                    if "*" in self._event_handlers:
+                        await self._event_handlers["*"](event)
+                        
+                except json.JSONDecodeError:
+                    logger.warning("Failed to decode WebSocket message", extra={"message": message})
+                except Exception as e:
+                    logger.error("Error processing ARI event", extra={"error": str(e)})
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning("WebSocket connection closed")
+            self._ws = None
+        except Exception as e:
+            logger.error("Error in WebSocket listener", extra={"error": str(e)})
+            self._ws = None
+
+    def register_event_handler(self, event_type: str, handler: Callable):
+        """Register a handler for specific ARI event type. Use '*' for all events."""
+        self._event_handlers[event_type] = handler
+        logger.info(f"Registered handler for event type: {event_type}")
+
     async def disconnect(self):
+        """Disconnect from ARI HTTP and WebSocket"""
+        # Cancel WebSocket listener
+        if self._ws_task:
+            self._ws_task.cancel()
+            try:
+                await self._ws_task
+            except asyncio.CancelledError:
+                pass
+            self._ws_task = None
+        
+        # Close WebSocket
+        if self._ws is not None:
+            await self._ws.close()
+            self._ws = None
+        
+        # Close HTTP client
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        
         self._connected_ok = False
 
     async def is_connected(self) -> bool:

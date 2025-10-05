@@ -61,10 +61,6 @@ class Settings(BaseSettings):
     upload_dir: str = Field(default="./uploads", description="Upload directory")
     audio_dir: str = Field(default="./audio", description="Audio files directory")
 
-    # Prometheus
-    metrics_enabled: bool = Field(default=True, description="Enable Prometheus metrics")
-    metrics_port: int = Field(default=8001, description="Port for metrics")
-
     # Rate limiting
     rate_limit_requests: int = Field(default=10, description="Rate limit requests per window")
     rate_limit_window: int = Field(default=60, description="Rate limit window in seconds")

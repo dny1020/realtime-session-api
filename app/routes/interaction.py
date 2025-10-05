@@ -13,18 +13,6 @@ from app.services.asterisk import get_asterisk_service, AsteriskService
 from app.models.call import Call, CallStatus
 from config.settings import get_settings
 from app.auth.jwt import get_current_user
-from app.instrumentation.metrics import (
-    CALLS_LAUNCHED,
-    CALLS_SUCCESS,
-    CALLS_FAILED,
-    ORIGINATE_LATENCY_SECONDS,
-    CALLS_TOTAL,
-    CALLS_LAUNCHED_V2,
-    CALLS_SUCCESS_V2,
-    CALLS_FAILED_V2,
-    CALLS_V2,
-)
-import time
 
 settings = get_settings()
 router = APIRouter()
@@ -110,15 +98,6 @@ async def originate_call(
     call_id = str(uuid.uuid4())
     
     try:
-        # Register attempt at API level
-        if settings.metrics_enabled:
-            try:
-                # legacy + v2
-                CALLS_TOTAL.inc()
-                CALLS_V2.inc()
-            except Exception as e:
-                logger.debug(f"Metrics error: {e}")
-
         # Create call record in database (if DB enabled)
         if db is not None and not settings.disable_db:
             db_call = Call(
@@ -135,15 +114,8 @@ async def originate_call(
             db.add(db_call)
             db.commit()
             db.refresh(db_call)
-        if settings.metrics_enabled:
-            try:
-                CALLS_LAUNCHED.inc()
-                CALLS_LAUNCHED_V2.inc()
-            except Exception as e:
-                logger.debug(f"Metrics error: {e}")
 
         # Execute directly (no Celery/Workers in this version)
-        start_t = time.perf_counter()
         asterisk_result = await asterisk_service.originate_call(
             phone_number=number,
             context=effective_context,
@@ -153,11 +125,6 @@ async def originate_call(
             caller_id=effective_caller_id,
             variables=effective_vars,
         )
-        if settings.metrics_enabled:
-            try:
-                ORIGINATE_LATENCY_SECONDS.observe(time.perf_counter() - start_t)
-            except Exception as e:
-                logger.debug(f"Metrics error: {e}")
         
         if asterisk_result["success"]:
             # Update record with Asterisk information
@@ -166,12 +133,6 @@ async def originate_call(
                 db_call.dialed_at = datetime.utcnow()
                 db_call.channel = asterisk_result.get("channel")
                 db.commit()
-            if settings.metrics_enabled:
-                try:
-                    CALLS_SUCCESS.inc()
-                    CALLS_SUCCESS_V2.inc()
-                except Exception as e:
-                    logger.debug(f"Metrics error: {e}")
             
             return CallResponse(
                 success=True,
@@ -189,12 +150,6 @@ async def originate_call(
                 db_call.failure_reason = asterisk_result.get("error", "Unknown error")
                 db_call.ended_at = datetime.utcnow()
                 db.commit()
-            if settings.metrics_enabled:
-                try:
-                    CALLS_FAILED.inc()
-                    CALLS_FAILED_V2.inc()
-                except Exception as e:
-                    logger.debug(f"Metrics error: {e}")
             
             return CallResponse(
                 success=False,
@@ -209,12 +164,6 @@ async def originate_call(
     except Exception as e:
         if db is not None and not settings.disable_db:
             db.rollback()
-        if settings.metrics_enabled:
-            try:
-                CALLS_FAILED.inc()
-                CALLS_FAILED_V2.inc()
-            except Exception as e:
-                logger.debug(f"Metrics error: {e}")
         
         # Try to update call record as failed if it was created
         try:

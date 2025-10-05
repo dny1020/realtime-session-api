@@ -13,8 +13,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
-      - internal-net
+      - app-net
     healthcheck:
       test:
         [
@@ -29,75 +31,50 @@ services:
       - no-new-privileges:true
 
   # ------------------------------
-  # NOTE: Asterisk service is not included in this docker-compose.
-  # Deploy Asterisk separately or add it here with proper configuration.
-  # The API expects Asterisk ARI to be available at ARI_HTTP_URL.
-  # Example service configuration can be found in the project documentation.
-  # ------------------------------
-
-  # ------------------------------
   # FastAPI - Contact Center API
+  # ------------------------------
+  # NOTE: Asterisk service is deployed separately as an external service.
+  # Ensure ARI_HTTP_URL points to your Asterisk server.
   # ------------------------------
   api:
     build: .
     container_name: contactcenter_api
-    # No host port exposure; access via Traefik only
+    ports:
+      - "8000:8000"
     environment:
-      - APP_NAME=${APP_NAME}
-      - APP_VERSION=${APP_VERSION}
-      - DEBUG=${DEBUG}
-      - LOG_LEVEL=${LOG_LEVEL}
+      - APP_NAME=${APP_NAME:-Contact Center API}
+      - APP_VERSION=${APP_VERSION:-1.0.0}
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SECRET_KEY=${SECRET_KEY}
       - DATABASE_URL=${DATABASE_URL}
       - DISABLE_DB=${DISABLE_DB:-false}
       - ARI_HTTP_URL=${ARI_HTTP_URL}
       - ARI_USERNAME=${ARI_USERNAME}
       - ARI_PASSWORD=${ARI_PASSWORD}
-      - ARI_APP=${ARI_APP}
-      - DEFAULT_CONTEXT=${DEFAULT_CONTEXT}
-      - DEFAULT_EXTENSION=${DEFAULT_EXTENSION}
-      - DEFAULT_PRIORITY=${DEFAULT_PRIORITY}
-      - DEFAULT_TIMEOUT=${DEFAULT_TIMEOUT}
-      - DEFAULT_CALLER_ID=${DEFAULT_CALLER_ID}
-      - ALGORITHM=${ALGORITHM}
-      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
+      - ARI_APP=${ARI_APP:-contactcenter}
+      - DEFAULT_CONTEXT=${DEFAULT_CONTEXT:-outbound-ivr}
+      - DEFAULT_EXTENSION=${DEFAULT_EXTENSION:-s}
+      - DEFAULT_PRIORITY=${DEFAULT_PRIORITY:-1}
+      - DEFAULT_TIMEOUT=${DEFAULT_TIMEOUT:-30000}
+      - DEFAULT_CALLER_ID=${DEFAULT_CALLER_ID:-Outbound Call}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       - JWT_ISSUER=${JWT_ISSUER:-}
       - JWT_AUDIENCE=${JWT_AUDIENCE:-}
-      - METRICS_ENABLED=${METRICS_ENABLED:-true}
-      - DOCS_ENABLED=${DOCS_ENABLED:-false}
+      - DOCS_ENABLED=${DOCS_ENABLED:-true}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
-      - WORKERS=${WORKERS:-1}
       - PYTHONUNBUFFERED=1
     depends_on:
       postgres:
         condition: service_healthy
-      # asterisk dependency removed - deploy Asterisk separately
     volumes:
       - ./uploads:/app/uploads
       - ./audio:/app/audio
       - ./logs:/app/logs
     networks:
-      - internal-net
-      - public-net
+      - app-net
     restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`${API_HOST}`)"
-      - "traefik.http.routers.api.entrypoints=websecure"
-      - "traefik.http.routers.api.tls=true"
-      - "traefik.http.routers.api.tls.certresolver=le"
-      - "traefik.http.services.api.loadbalancer.server.port=8000"
-      - "traefik.http.routers.api.middlewares=api-sec-headers@docker"
-      - "traefik.http.routers.api-redirect.rule=Host(`${API_HOST}`)"
-      - "traefik.http.routers.api-redirect.entrypoints=web"
-      - "traefik.http.routers.api-redirect.middlewares=redirect-to-https"
-      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
-      - "traefik.http.middlewares.api-sec-headers.headers.stsSeconds=63072000"
-      - "traefik.http.middlewares.api-sec-headers.headers.stsIncludeSubdomains=true"
-      - "traefik.http.middlewares.api-sec-headers.headers.browserXssFilter=true"
-      - "traefik.http.middlewares.api-sec-headers.headers.contentTypeNosniff=true"
-      - "traefik.http.middlewares.api-sec-headers.headers.referrerPolicy=no-referrer"
-      - "traefik.http.middlewares.api-sec-headers.headers.frameDeny=true"
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -105,87 +82,11 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 20s
-
-  # ------------------------------
-  # Prometheus for metrics
-  # ------------------------------
-  prometheus:
-    image: prom/prometheus:v2.54.1
-    container_name: contactcenter_prometheus
-    # No host port exposure; reachable via internal network or Traefik if configured
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml
-      - prometheus_data:/prometheus
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--web.console.libraries=/etc/prometheus/console_libraries"
-      - "--web.console.templates=/etc/prometheus/consoles"
-      - "--storage.tsdb.retention.time=200h"
-      - "--web.enable-lifecycle"
-    networks:
-      - internal-net
-    restart: unless-stopped
-
-  # ------------------------------
-  # Grafana for visualization
-  # ------------------------------
-  grafana:
-    image: grafana/grafana:10.4.5
-    container_name: contactcenter_grafana
-    # No host port exposure; route via Traefik if desired
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-    networks:
-      - internal-net
-    restart: unless-stopped
-    depends_on:
-      - prometheus
-
-  # ------------------------------
-  # Traefik reverse proxy
-  # ------------------------------
-  traefik:
-    image: traefik:v2.11
-    container_name: contactcenter_traefik
-    command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:80
-      - --entrypoints.websecure.address=:443
-      - --certificatesresolvers.le.acme.httpchallenge=true
-      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
-      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
-      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-      - --accesslog=true
-      - --log.level=INFO
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/letsencrypt:/letsencrypt
-    networks:
-      - public-net
-      - internal-net
-    restart: unless-stopped
-    # No public dashboard labels
-    security_opt:
-      - no-new-privileges:true
+      start_period: 30s
 
 volumes:
   postgres_data:
-  prometheus_data:
-  grafana_data:
 
 networks:
-  public-net:
+  app-net:
     driver: bridge
-  internal-net:
-    driver: bridge
-    internal: true

@@ -1,134 +1,97 @@
-# Contact Center API (Outbound IVR Dialer)
-Minimal Python (FastAPI) API to trigger single outbound calls through Asterisk, playing prerecorded messages or basic IVRs without human agents. This project focuses only on per-number call origination and call status queries.
+# Contact Center API - Production Ready
 
----
-## Functionality
-### Single Calls
-  - POST /api/v2/interaction/{number} → Initiate a call to a number via Asterisk ARI
-  - Connect the number to an IVR context or audio playback
+Minimal Python FastAPI service for triggering **single outbound IVR calls** via Asterisk ARI. Focused on per-number call origination and real-time status tracking.
 
-### Monitoring
-  - GET /api/v2/status/{call_id} → Query the status of a call (pending, ringing, answered, failed)
+## ✨ Features
 
-## Technologies
-* Python 3.x
-* FastAPI → REST API
-* Asterisk ARI → Call control/origination (REST/WebSocket)
-* PostgreSQL (production) → Persistence for calls. Can be disabled locally.
-* Docker (optional) → Packaging and deployment
-### Scope:
-  - Local: can run without a database by setting DISABLE_DB=true.
- 
+- 🎯 **Single Call Origination**: Trigger outbound calls to specific numbers
+- 📊 **Real-time Status Updates**: WebSocket connection to Asterisk ARI for live call status
+- 🔐 **JWT Authentication**: Secure OAuth2 password grant with bcrypt
+- 🗄️ **PostgreSQL Persistence**: Call records and user management
+- 🐳 **Docker Ready**: Production-ready Docker Compose setup
+- 📝 **RESTful API**: Clean REST endpoints with OpenAPI/Swagger docs
 
-## Endpoints
-  - POST /api/v2/interaction/{number} → Start a call to a number
-  - GET /api/v2/status/{call_id} → Get call status
-  - POST /api/v2/calls → Create call (body: phone_number, context, …)
-  - GET /api/v2/calls/{call_id} → Query call status
+## 🚀 Quick Start
 
-## Project Structure
+### Prerequisites
+
+- Docker and Docker Compose
+- Asterisk server with ARI enabled (deployed separately)
+
+### 1. Clone and Configure
 
 ```bash
+# Clone repository
+git clone <your-repo>
+cd api_contact_center
 
-  contact-center-api/
-│── app/
-│   ├── main.py         # FastAPI entrypoint
-│   ├── routes/         # Routes and controllers
-│   ├── services/       # Business logic (Asterisk ARI)
-│   ├── models/         # ORM (SQLAlchemy / pydantic)
-│   
-│
-│── config/
-│   └── settings.py     # Environment variables
-│── README.md
-│── requirements.txt
-│── Dockerfile
+# Create environment file
+cp .env.example .env
 
- ```
+# Generate secrets
+openssl rand -hex 32  # For SECRET_KEY
+openssl rand -hex 24  # For POSTGRES_PASSWORD
+```
 
+### 2. Update .env
 
-## Architecture
+```env
+SECRET_KEY=<your-generated-secret>
+POSTGRES_PASSWORD=<your-db-password>
+ARI_HTTP_URL=http://your-asterisk-server:8088/ari
+ARI_USERNAME=ariuser
+ARI_PASSWORD=<your-ari-password>
+```
+
+### 3. Start Services
 
 ```bash
+# Start API and database
+docker-compose up -d
 
-  Client[Client\n(curl/Insomnia/Browser)]
-  Traefik[(Traefik\n:80/:443)]
-  API[FastAPI API\nJWT + /metrics]
-  
-  Postgres[(PostgreSQL)]
-  Asterisk[Asterisk\nARI + PJSIP]
-  Prometheus[Prometheus]
-  Grafana[Grafana]
-  
-  Client -->|api.localhost| Traefik --> API
-  API --> Postgres
-  API -->|ARI (HTTP/WS)| Asterisk
-  Prometheus --> API
-  Grafana --> Prometheus
+# Check health
+curl http://localhost:8000/health
+```
 
- ```
+### 4. Create User
 
- ## Services
-
-```sql
-
- | Service       | URL / Port                                                              | Notes                                                      |
-| ------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------- |
-| API (Traefik) | [http://api.localhost](http://api.localhost) (dev) / https://<API_HOST> | FastAPI with `/docs`, `/health`, `/metrics`                |
-| Traefik       | Disabled by default                                                     | Dashboard not exposed for security                         |
-| Prometheus    | Not exposed by default                                                  | Map port in dev if needed                                  |
-| Grafana       | Not exposed by default                                                  | Default dev user/pass: `admin / admin123` (change in prod) |
-| Asterisk ARI  | Internal only                                                           | User/pass in `ari.conf`; API connects internally           |
-| SIP/PJSIP     | 5060 (internal)                                                         | Expose only for softphone/trunk testing                    |
-## Authentication (Production)
-- OAuth2 Password Grant to obtain JWT at `POST /api/v2/token` using username/password.
-- Passwords are stored hashed (bcrypt). Set `SECRET_KEY` and optionally `JWT_ISSUER`, `JWT_AUDIENCE`.
-- Tokens include `sub`, `iat`, `exp`, and optionally `iss`/`aud`.
-
-## Configuration
-- Set DATABASE_URL for production (PostgreSQL). Use `DISABLE_DB=true` to run in minimal mode without DB (only for dev/testing; token endpoint requires DB).
-- Asterisk ARI settings: `ARI_HTTP_URL`, `ARI_USERNAME`, `ARI_PASSWORD`, `ARI_APP`.
-- Default call routing: `DEFAULT_CONTEXT`, `DEFAULT_EXTENSION`, `DEFAULT_PRIORITY`, `DEFAULT_TIMEOUT`, `DEFAULT_CALLER_ID`.
-- Metrics: `METRICS_ENABLED` to enable; `/metrics` exposed only when enabled.
-
-## Security
-- Use strong `SECRET_KEY` and HTTPS with a reverse proxy (e.g., Traefik, Nginx).
-- Restrict access to /docs and /metrics in production (via IP allowlist or auth at the proxy layer).
-- Don’t expose Asterisk ARI publicly.
-
-## Run locally
-1) Install dependencies
-2) Start FastAPI (UVicorn) and Asterisk with ARI available
-3) Get a token at `/api/v2/token` then call protected endpoints
-
-## API Usage Examples
-
-### Authentication
-Get a JWT token:
 ```bash
-curl -X POST http://api.localhost/api/v2/token \
+docker-compose run --rm api python -m app.auth.create_user
+```
+
+## 📡 API Endpoints
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| POST | `/api/v2/token` | Get JWT token | No |
+| POST | `/api/v2/interaction/{number}` | Originate call | Yes |
+| GET | `/api/v2/status/{call_id}` | Get call status | Yes |
+| POST | `/api/v2/calls` | Create call (RESTful) | Yes |
+| GET | `/api/v2/calls/{call_id}` | Get call details | Yes |
+| GET | `/health` | Health check | No |
+| GET | `/docs` | API documentation | No |
+
+## 🔌 Usage Examples
+
+### Get Authentication Token
+
+```bash
+curl -X POST http://localhost:8000/api/v2/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=your_username&password=your_password"
 ```
 
-Response:
-```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer"
-}
-```
+### Make an Outbound Call
 
-### Originate a Call
-Make an outbound call to a phone number:
 ```bash
-curl -X POST http://api.localhost/api/v2/interaction/+1234567890 \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+TOKEN="your_jwt_token"
+
+curl -X POST http://localhost:8000/api/v2/interaction/+1234567890 \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "context": "outbound-ivr",
     "extension": "s",
-    "priority": 1,
     "timeout": 30000,
     "caller_id": "MyCompany"
   }'
@@ -141,17 +104,17 @@ Response:
   "call_id": "550e8400-e29b-41d4-a716-446655440000",
   "phone_number": "+1234567890",
   "message": "Call originated successfully",
-  "channel": "Local/+1234567890@outbound-ivr",
+  "channel": "550e8400-e29b-41d4-a716-446655440000",
   "status": "dialing",
-  "created_at": "2025-10-01T12:00:00Z"
+  "created_at": "2025-01-05T12:00:00Z"
 }
 ```
 
 ### Check Call Status
-Query the status of an active or completed call:
+
 ```bash
-curl -X GET http://api.localhost/api/v2/status/{call_id} \
-  -H "Authorization: Bearer YOUR_TOKEN"
+curl -X GET http://localhost:8000/api/v2/status/{call_id} \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Response:
@@ -160,43 +123,205 @@ Response:
   "call_id": "550e8400-e29b-41d4-a716-446655440000",
   "phone_number": "+1234567890",
   "status": "answered",
-  "channel": "Local/+1234567890@outbound-ivr",
-  "context": "outbound-ivr",
-  "extension": "s",
-  "caller_id": "MyCompany",
-  "created_at": "2025-10-01T12:00:00Z",
-  "dialed_at": "2025-10-01T12:00:01Z",
-  "answered_at": "2025-10-01T12:00:05Z",
-  "ended_at": null,
-  "duration": null,
-  "failure_reason": null,
-  "attempt_number": 1,
-  "is_active": true,
-  "is_completed": false
+  "channel": "550e8400-e29b-41d4-a716-446655440000",
+  "created_at": "2025-01-05T12:00:00Z",
+  "answered_at": "2025-01-05T12:00:05Z",
+  "duration": 45,
+  "is_active": false,
+  "is_completed": true
 }
 ```
 
-### RESTful Endpoints
-Alternative RESTful approach:
-```bash
-# Create a call
-curl -X POST http://api.localhost/api/v2/calls \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone_number": "+1234567890",
-    "context": "outbound-ivr",
-    "caller_id": "MyCompany"
-  }'
+## 🏗️ Architecture
 
-# Get call details
-curl -X GET http://api.localhost/api/v2/calls/{call_id} \
-  -H "Authorization: Bearer YOUR_TOKEN"
+```
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │ HTTPS
+       ▼
+┌─────────────┐      ┌──────────────┐
+│  FastAPI    │◄────►│  PostgreSQL  │
+│     API     │      │   Database   │
+└──────┬──────┘      └──────────────┘
+       │
+       │ ARI HTTP + WebSocket
+       ▼
+┌─────────────┐
+│  Asterisk   │
+│     PBX     │
+└─────────────┘
 ```
 
-## Metrics
-- Prometheus metrics at `/metrics` when enabled.
-- Low-cardinality labels for reliability; avoid per-ID paths.
- ```
+### Key Components
 
+- **FastAPI**: REST API with async/await
+- **PostgreSQL**: Call records and user storage
+- **Asterisk ARI**: Call control via HTTP + WebSocket for real-time events
+- **JWT Auth**: Secure token-based authentication
 
+## 🔧 Configuration
+
+Key environment variables:
+
+```env
+# Database
+DATABASE_URL=postgresql://user:pass@host:5432/db
+
+# Asterisk ARI (external service)
+ARI_HTTP_URL=http://asterisk-server:8088/ari
+ARI_USERNAME=ariuser
+ARI_PASSWORD=secure_password
+ARI_APP=contactcenter
+
+# Security
+SECRET_KEY=your-secret-key
+JWT_ISSUER=your-issuer
+JWT_AUDIENCE=your-audience
+
+# Call Defaults
+DEFAULT_CONTEXT=outbound-ivr
+DEFAULT_EXTENSION=s
+DEFAULT_TIMEOUT=30000
+DEFAULT_CALLER_ID=Outbound Call
+```
+
+## 🎛️ Asterisk Configuration
+
+Configure ARI in `/etc/asterisk/ari.conf`:
+
+```ini
+[general]
+enabled = yes
+
+[ariuser]
+type = user
+read_only = no
+password = your_password
+```
+
+Create dialplan in `/etc/asterisk/extensions.conf`:
+
+```ini
+[outbound-ivr]
+exten => _X.,1,NoOp(Outbound call to ${EXTEN})
+ same => n,Answer()
+ same => n,Stasis(contactcenter)
+ same => n,Playback(welcome)
+ same => n,Hangup()
+```
+
+## 📊 Call Status Flow
+
+The API tracks calls through these states:
+
+1. **pending**: Call created in database
+2. **dialing**: Channel created, dialing started
+3. **ringing**: Remote party ringing
+4. **answered**: Call answered
+5. **completed**: Call ended successfully
+6. **failed/busy/no_answer**: Call failed with specific reason
+
+Status updates happen **automatically** via WebSocket events from Asterisk.
+
+## 🐳 Docker Services
+
+```yaml
+services:
+  postgres:    # PostgreSQL database
+  api:         # FastAPI application
+```
+
+Note: **Asterisk is deployed separately** as an external service.
+
+## 📦 Production Deployment
+
+See [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) for:
+- SSL/HTTPS setup with Nginx or Traefik
+- Database migrations
+- Backup strategies
+- Scaling considerations
+- Security checklist
+
+## 🧪 Development
+
+### Local Setup (without Docker)
+
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run migrations
+alembic upgrade head
+
+# Create user
+python -m app.auth.create_user
+
+# Start server
+uvicorn app.main:app --reload
+```
+
+### Run Tests
+
+```bash
+pytest tests/
+```
+
+### Database Migrations
+
+```bash
+# Create new migration
+alembic revision --autogenerate -m "description"
+
+# Apply migrations
+alembic upgrade head
+
+# Rollback
+alembic downgrade -1
+```
+
+## 🔒 Security Features
+
+- ✅ JWT token authentication with bcrypt password hashing
+- ✅ Rate limiting on token endpoint (10 req/60s)
+- ✅ SECRET_KEY validation at startup
+- ✅ Non-root Docker user
+- ✅ SQL injection protection (SQLAlchemy ORM)
+- ✅ Input validation (Pydantic models)
+- ✅ CORS configuration
+- ✅ No public exposure of Asterisk ARI
+
+## 📝 API Documentation
+
+Interactive API docs available at:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+## 🛠️ Tech Stack
+
+- **Python 3.11+**
+- **FastAPI 0.117+**: Modern async web framework
+- **SQLAlchemy 2.0**: ORM
+- **PostgreSQL 15**: Database
+- **Alembic**: Database migrations
+- **httpx**: Async HTTP client
+- **websockets**: Real-time ARI events
+- **python-jose**: JWT handling
+- **passlib**: Password hashing
+- **loguru**: Structured logging
+
+## 📄 License
+
+[Your License]
+
+## 🤝 Contributing
+
+[Contributing guidelines]
+
+## 📧 Support
+
+[Support information]

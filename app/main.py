@@ -3,13 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 import uvicorn
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from typing import Optional
 
 from config.settings import get_settings
 from app.services.asterisk import get_asterisk_service, AsteriskService
 from app.database import get_db, engine
-from app.models import Base
+from app.models import Base, CallStatus
 from app.routes import interaction
 from app.routes import auth as auth_routes
 from app.middleware.logging_middleware import JSONLoggingMiddleware
@@ -19,6 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 import time
 from collections import defaultdict, deque
+from datetime import datetime
 
 settings = get_settings()
 
@@ -65,6 +65,71 @@ class SimpleRateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+async def handle_ari_event(event: dict):
+    """Handle ARI events and update call status in database"""
+    from app.database import SessionLocal
+    from app.models.call import Call
+    
+    if settings.disable_db:
+        return
+    
+    event_type = event.get("type")
+    channel = event.get("channel", {})
+    channel_id = channel.get("id")
+    
+    if not channel_id:
+        return
+    
+    db = SessionLocal()
+    try:
+        # Find call by channel ID
+        call = db.query(Call).filter(Call.channel == channel_id).first()
+        if not call:
+            return
+        
+        logger.info(f"Processing ARI event {event_type} for call {call.call_id}")
+        
+        # Update call status based on event
+        if event_type == "StasisStart":
+            call.status = CallStatus.DIALING
+            call.dialed_at = datetime.utcnow()
+        elif event_type == "ChannelStateChange":
+            state = channel.get("state")
+            if state == "Ringing":
+                call.status = CallStatus.RINGING
+            elif state == "Up":
+                call.status = CallStatus.ANSWERED
+                if not call.answered_at:
+                    call.answered_at = datetime.utcnow()
+        elif event_type == "ChannelDestroyed":
+            cause = channel.get("cause")
+            cause_txt = channel.get("cause_txt", "")
+            
+            if call.status == CallStatus.ANSWERED:
+                call.status = CallStatus.COMPLETED
+            elif "BUSY" in cause_txt.upper() or cause == 17:
+                call.status = CallStatus.BUSY
+            elif "NO_ANSWER" in cause_txt.upper() or cause == 19:
+                call.status = CallStatus.NO_ANSWER
+            else:
+                call.status = CallStatus.FAILED
+                call.failure_reason = cause_txt or f"Cause {cause}"
+            
+            call.ended_at = datetime.utcnow()
+            if call.answered_at:
+                duration = (call.ended_at - call.answered_at).total_seconds()
+                call.duration = int(duration)
+        
+        db.commit()
+        logger.info(f"Updated call {call.call_id} status to {call.status.value}")
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error handling ARI event: {e}", extra={"event": event})
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manager life cycle of the application"""
@@ -76,12 +141,14 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
         logger.info("Database initialized (debug)")
 
-    # Connect to Asterisk ARI (not critical in test/dev)
+    # Connect to Asterisk ARI (WebSocket + HTTP)
     asterisk_service = await get_asterisk_service()
     try:
         connected = await asterisk_service.connect()
         if connected:
-            logger.info("Connected to Asterisk ARI")
+            logger.info("Connected to Asterisk ARI (HTTP + WebSocket)")
+            # Register event handler for call status updates
+            asterisk_service.register_event_handler("*", handle_ari_event)
         else:
             logger.warning("Asterisk ARI connection not established (test/dev mode or error)")
     except Exception as e:
@@ -139,18 +206,6 @@ async def root():
         "health": "/health",
         "auth_token": "/api/v2/token"
     }
-
-
-@app.get("/metrics")
-async def metrics():
-    """Endpoint for Prometheus metrics"""
-    if not settings.metrics_enabled:
-        return Response(status_code=404)
-    data = generate_latest()
-    resp = Response(content=data, media_type=CONTENT_TYPE_LATEST)
-    # Avoid caching metrics
-    resp.headers["Cache-Control"] = "no-store"
-    return resp
 
 
 @app.get("/health")
