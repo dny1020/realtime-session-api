@@ -1,65 +1,36 @@
-# Contact Center API - Production Ready
+# Contact Center API
 
-Minimal Python FastAPI service for triggering **single outbound IVR calls** via Asterisk ARI. Focused on per-number call origination and real-time status tracking.
+![CI/CD](https://github.com/YOUR_USERNAME/api_contact_center/workflows/CI%2FCD%20Pipeline/badge.svg)
+![Tests](https://github.com/YOUR_USERNAME/api_contact_center/workflows/Pull%20Request%20Checks/badge.svg)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## ✨ Features
+Production-ready FastAPI service for **single outbound IVR calls** via Asterisk ARI with real-time WebSocket status updates.
 
-- 🎯 **Single Call Origination**: Trigger outbound calls to specific numbers
-- 📊 **Real-time Status Updates**: WebSocket connection to Asterisk ARI for live call status
-- 🔐 **JWT Authentication**: Secure OAuth2 password grant with bcrypt
-- 🗄️ **PostgreSQL Persistence**: Call records and user management
-- 🐳 **Docker Ready**: Production-ready Docker Compose setup
-- 📝 **RESTful API**: Clean REST endpoints with OpenAPI/Swagger docs
+## Features
 
-## 🚀 Quick Start
+- 🎯 Single call origination to specific numbers
+- 📊 Real-time status updates via WebSocket
+- 🔐 JWT authentication with bcrypt
+- 🗄️ PostgreSQL persistence
+- 🐳 Docker ready with multi-platform images
+- 🚀 CI/CD with GitHub Actions
+- 📝 RESTful API with OpenAPI docs
 
-### Prerequisites
+## Quick Start
 
-- Docker and Docker Compose
-- Asterisk server with ARI enabled (deployed separately)
-
-### 1. Clone and Configure
-
-```bash
-# Clone repository
-git clone <your-repo>
-cd api_contact_center
-
-# Create environment file
-cp .env.example .env
-
-# Generate secrets
-openssl rand -hex 32  # For SECRET_KEY
-openssl rand -hex 24  # For POSTGRES_PASSWORD
-```
-
-### 2. Update .env
-
-```env
-SECRET_KEY=<your-generated-secret>
-POSTGRES_PASSWORD=<your-db-password>
-ARI_HTTP_URL=http://your-asterisk-server:8088/ari
-ARI_USERNAME=ariuser
-ARI_PASSWORD=<your-ari-password>
-```
-
-### 3. Start Services
+### Using Docker (Recommended)
 
 ```bash
-# Start API and database
+# Pull from GitHub Container Registry
+docker pull ghcr.io/YOUR_USERNAME/api_contact_center:latest
+
+# Or use docker-compose
 docker-compose up -d
-
-# Check health
-curl http://localhost:8000/health
 ```
 
-### 4. Create User
+See [QUICKSTART.md](QUICKSTART.md) for detailed setup (5 minutes).
 
-```bash
-docker-compose run --rm api python -m app.auth.create_user
-```
-
-## 📡 API Endpoints
+## API Endpoints
 
 | Method | Endpoint | Description | Auth |
 |--------|----------|-------------|------|
@@ -71,98 +42,59 @@ docker-compose run --rm api python -m app.auth.create_user
 | GET | `/health` | Health check | No |
 | GET | `/docs` | API documentation | No |
 
-## 🔌 Usage Examples
-
-### Get Authentication Token
+## Usage Example
 
 ```bash
+# Get token
 curl -X POST http://localhost:8000/api/v2/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=your_username&password=your_password"
-```
+  -d "username=admin&password=yourpass"
 
-### Make an Outbound Call
-
-```bash
-TOKEN="your_jwt_token"
-
+# Make call
+TOKEN="your_token"
 curl -X POST http://localhost:8000/api/v2/interaction/+1234567890 \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "context": "outbound-ivr",
-    "extension": "s",
-    "timeout": 30000,
-    "caller_id": "MyCompany"
-  }'
-```
+  -d '{"context":"outbound-ivr","caller_id":"MyCompany"}'
 
-Response:
-```json
-{
-  "success": true,
-  "call_id": "550e8400-e29b-41d4-a716-446655440000",
-  "phone_number": "+1234567890",
-  "message": "Call originated successfully",
-  "channel": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "dialing",
-  "created_at": "2025-01-05T12:00:00Z"
-}
-```
-
-### Check Call Status
-
-```bash
+# Check status (updates in real-time!)
 curl -X GET http://localhost:8000/api/v2/status/{call_id} \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Response:
-```json
-{
-  "call_id": "550e8400-e29b-41d4-a716-446655440000",
-  "phone_number": "+1234567890",
-  "status": "answered",
-  "channel": "550e8400-e29b-41d4-a716-446655440000",
-  "created_at": "2025-01-05T12:00:00Z",
-  "answered_at": "2025-01-05T12:00:05Z",
-  "duration": 45,
-  "is_active": false,
-  "is_completed": true
-}
-```
-
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────┐
-│   Client    │
-└──────┬──────┘
-       │ HTTPS
-       ▼
-┌─────────────┐      ┌──────────────┐
-│  FastAPI    │◄────►│  PostgreSQL  │
-│     API     │      │   Database   │
-└──────┬──────┘      └──────────────┘
-       │
-       │ ARI HTTP + WebSocket
-       ▼
-┌─────────────┐
-│  Asterisk   │
-│     PBX     │
-└─────────────┘
+Client → FastAPI API ← PostgreSQL
+            ↓
+        Asterisk (WebSocket + HTTP)
 ```
 
-### Key Components
+**Call Status Flow:**  
+`pending` → `dialing` → `ringing` → `answered` → `completed`
 
-- **FastAPI**: REST API with async/await
-- **PostgreSQL**: Call records and user storage
-- **Asterisk ARI**: Call control via HTTP + WebSocket for real-time events
-- **JWT Auth**: Secure token-based authentication
+Status updates automatically via WebSocket events from Asterisk.
 
-## 🔧 Configuration
+## Docker Images
 
-Key environment variables:
+Available on GitHub Container Registry:
+
+```bash
+# Latest
+docker pull ghcr.io/YOUR_USERNAME/api_contact_center:latest
+
+# Specific version
+docker pull ghcr.io/YOUR_USERNAME/api_contact_center:1.0.0
+
+# Development
+docker pull ghcr.io/YOUR_USERNAME/api_contact_center:develop
+```
+
+**Multi-platform support:** `linux/amd64` and `linux/arm64`
+
+## Configuration
+
+Key environment variables (see [.env.example](.env.example)):
 
 ```env
 # Database
@@ -175,153 +107,86 @@ ARI_PASSWORD=secure_password
 ARI_APP=contactcenter
 
 # Security
-SECRET_KEY=your-secret-key
-JWT_ISSUER=your-issuer
-JWT_AUDIENCE=your-audience
-
-# Call Defaults
-DEFAULT_CONTEXT=outbound-ivr
-DEFAULT_EXTENSION=s
-DEFAULT_TIMEOUT=30000
-DEFAULT_CALLER_ID=Outbound Call
+SECRET_KEY=your-strong-secret-key
 ```
 
-## 🎛️ Asterisk Configuration
-
-Configure ARI in `/etc/asterisk/ari.conf`:
-
-```ini
-[general]
-enabled = yes
-
-[ariuser]
-type = user
-read_only = no
-password = your_password
-```
-
-Create dialplan in `/etc/asterisk/extensions.conf`:
-
-```ini
-[outbound-ivr]
-exten => _X.,1,NoOp(Outbound call to ${EXTEN})
- same => n,Answer()
- same => n,Stasis(contactcenter)
- same => n,Playback(welcome)
- same => n,Hangup()
-```
-
-## 📊 Call Status Flow
-
-The API tracks calls through these states:
-
-1. **pending**: Call created in database
-2. **dialing**: Channel created, dialing started
-3. **ringing**: Remote party ringing
-4. **answered**: Call answered
-5. **completed**: Call ended successfully
-6. **failed/busy/no_answer**: Call failed with specific reason
-
-Status updates happen **automatically** via WebSocket events from Asterisk.
-
-## 🐳 Docker Services
-
-```yaml
-services:
-  postgres:    # PostgreSQL database
-  api:         # FastAPI application
-```
-
-Note: **Asterisk is deployed separately** as an external service.
-
-## 📦 Production Deployment
-
-See [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) for:
-- SSL/HTTPS setup with Nginx or Traefik
-- Database migrations
-- Backup strategies
-- Scaling considerations
-- Security checklist
-
-## 🧪 Development
-
-### Local Setup (without Docker)
+## Development
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
-
 # Install dependencies
 pip install -r requirements.txt
 
-# Run migrations
-alembic upgrade head
+# Run tests
+pytest tests/ -v
 
-# Create user
-python -m app.auth.create_user
-
-# Start server
+# Start locally
 uvicorn app.main:app --reload
 ```
 
-### Run Tests
+Tests run automatically on push via GitHub Actions.
 
-```bash
-pytest tests/
-```
+## CI/CD Pipeline
 
-### Database Migrations
+Automated workflows for:
+- ✅ Testing on every push
+- ✅ Multi-platform Docker builds
+- ✅ Publishing to GitHub Container Registry
+- ✅ Security scanning with Trivy
+- ✅ Dependency updates with Dependabot
 
-```bash
-# Create new migration
-alembic revision --autogenerate -m "description"
+See [CI_CD_SETUP.md](CI_CD_SETUP.md) for setup instructions.
 
-# Apply migrations
-alembic upgrade head
+## Documentation
 
-# Rollback
-alembic downgrade -1
-```
+- **[QUICKSTART.md](QUICKSTART.md)** - Get started in 5 minutes
+- **[PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)** - Production deployment guide
+- **[CI_CD_SETUP.md](CI_CD_SETUP.md)** - CI/CD setup and usage
+- **[CHANGES_SUMMARY.md](CHANGES_SUMMARY.md)** - Recent changes and features
+- **[TEST_RESULTS.md](TEST_RESULTS.md)** - Test execution details
 
-## 🔒 Security Features
+## Tech Stack
 
-- ✅ JWT token authentication with bcrypt password hashing
-- ✅ Rate limiting on token endpoint (10 req/60s)
-- ✅ SECRET_KEY validation at startup
+- Python 3.11+ / FastAPI 0.117+
+- PostgreSQL 15 / SQLAlchemy 2.0 / Alembic
+- Asterisk ARI (WebSocket + HTTP)
+- JWT (python-jose) / Bcrypt (passlib)
+- Docker / GitHub Actions
+
+## Security
+
+- ✅ JWT authentication with bcrypt hashing
+- ✅ Rate limiting (10 req/60s on token endpoint)
+- ✅ Input validation with Pydantic
+- ✅ SQL injection protection (ORM)
 - ✅ Non-root Docker user
-- ✅ SQL injection protection (SQLAlchemy ORM)
-- ✅ Input validation (Pydantic models)
-- ✅ CORS configuration
-- ✅ No public exposure of Asterisk ARI
+- ✅ Automated security scanning
+- ✅ No public Asterisk ARI exposure
 
-## 📝 API Documentation
+## API Documentation
 
-Interactive API docs available at:
+Interactive docs available at:
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
 
-## 🛠️ Tech Stack
+## Contributing
 
-- **Python 3.11+**
-- **FastAPI 0.117+**: Modern async web framework
-- **SQLAlchemy 2.0**: ORM
-- **PostgreSQL 15**: Database
-- **Alembic**: Database migrations
-- **httpx**: Async HTTP client
-- **websockets**: Real-time ARI events
-- **python-jose**: JWT handling
-- **passlib**: Password hashing
-- **loguru**: Structured logging
+1. Fork the repository
+2. Create feature branch (`git checkout -b feature/name`)
+3. Commit changes (`git commit -m 'Add feature'`)
+4. Push to branch (`git push origin feature/name`)
+5. Open Pull Request
 
-## 📄 License
+PRs are automatically tested via GitHub Actions.
 
-[Your License]
+## License
 
-## 🤝 Contributing
+[MIT License](LICENSE)
 
-[Contributing guidelines]
+## Support
 
-## 📧 Support
+- **Issues:** [GitHub Issues](https://github.com/YOUR_USERNAME/api_contact_center/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/YOUR_USERNAME/api_contact_center/discussions)
 
-[Support information]
+---
+
+⭐ **Star this repo if you find it useful!**
