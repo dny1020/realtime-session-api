@@ -18,7 +18,26 @@ Production-ready FastAPI service for **single outbound IVR calls** via Asterisk 
 
 ## Quick Start
 
-### Using Docker (Recommended)
+### Using Makefile (Recommended)
+
+```bash
+# Complete first-time setup (creates .env, starts services, runs migrations, creates user)
+make quick-start
+
+# Daily commands
+make up          # Start services
+make logs        # View logs
+make test        # Run tests
+make health      # Check API health
+make down        # Stop services
+
+# See all commands
+make help
+```
+
+See [MAKEFILE_GUIDE.md](MAKEFILE_GUIDE.md) for complete command reference.
+
+### Using Docker Compose (Manual)
 
 ```bash
 # Pull from GitHub Container Registry
@@ -28,7 +47,7 @@ docker pull ghcr.io/YOUR_USERNAME/api_contact_center:latest
 docker-compose up -d
 ```
 
-See [QUICKSTART.md](QUICKSTART.md) for detailed setup (5 minutes).
+See [QUICKSTART.md](QUICKSTART.md) for detailed manual setup.
 
 ## API Endpoints
 
