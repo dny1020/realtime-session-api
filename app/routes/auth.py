@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.auth.jwt import create_access_token, verify_password
 from app.database import get_db
 from app.models.user import User
+from app.services.metrics import track_auth_attempt
 
 router = APIRouter()
 
@@ -33,6 +34,8 @@ async def issue_token(
     ).first()
     
     if not user or not verify_password(form_data.password, user.hashed_password):
+        track_auth_attempt(success=False)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    track_auth_attempt(success=True)
     return TokenResponse(access_token=create_access_token(subject=user.username))

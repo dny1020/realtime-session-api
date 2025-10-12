@@ -1,4 +1,4 @@
-"""
+"""  # noqa: E501
 Call State Machine Validator
 
 Enforces valid state transitions for call lifecycle.
@@ -8,6 +8,14 @@ from typing import Dict, Set, Optional
 from loguru import logger
 
 from app.models import CallStatus
+
+# Import metrics if available
+try:
+    from app.services.metrics import track_state_transition
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    track_state_transition = None
 
 
 class CallStateMachine:
@@ -129,6 +137,14 @@ class CallStateMachine:
             True if valid, False if invalid
         """
         is_valid, error_msg = cls.can_transition(current_status, new_status)
+        
+        # Track metrics if available
+        if METRICS_AVAILABLE and track_state_transition:
+            track_state_transition(
+                from_state=current_status.value,
+                to_state=new_status.value,
+                success=is_valid
+            )
         
         if is_valid:
             if current_status != new_status:  # Don't log idempotent transitions
