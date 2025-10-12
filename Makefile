@@ -173,17 +173,24 @@ check: format lint ## Format and lint code
 
 test: ## Run tests
 	@echo "$(GREEN)Running tests...$(NC)"
-	DISABLE_DB=true SECRET_KEY=test pytest tests/ -v
+	PYTHONPATH=. DISABLE_DB=true SECRET_KEY=test pytest tests/ -v
 	@echo "$(GREEN)✓ Tests complete$(NC)"
 
 test-cov: ## Run tests with coverage
 	@echo "$(GREEN)Running tests with coverage...$(NC)"
-	DISABLE_DB=true SECRET_KEY=test pytest tests/ -v --cov=app --cov-report=html --cov-report=term-missing
-	@echo "$(GREEN)✓ Coverage report generated in htmlcov/$(NC)"
+	@if command -v pytest-cov >/dev/null 2>&1 || python3 -m pytest --cov >/dev/null 2>&1; then \
+		PYTHONPATH=. DISABLE_DB=true SECRET_KEY=test pytest tests/ -v --cov=app --cov-report=html --cov-report=term-missing; \
+		echo "$(GREEN)✓ Coverage report generated in htmlcov/$(NC)"; \
+	else \
+		echo "$(YELLOW)pytest-cov not installed. Installing...$(NC)"; \
+		pip3 install pytest-cov; \
+		PYTHONPATH=. DISABLE_DB=true SECRET_KEY=test pytest tests/ -v --cov=app --cov-report=html --cov-report=term-missing; \
+		echo "$(GREEN)✓ Coverage report generated in htmlcov/$(NC)"; \
+	fi
 
 test-watch: ## Run tests in watch mode
 	@echo "$(GREEN)Running tests in watch mode...$(NC)"
-	DISABLE_DB=true SECRET_KEY=test pytest-watch tests/
+	PYTHONPATH=. DISABLE_DB=true SECRET_KEY=test pytest-watch tests/
 
 ##@ Health & Status
 

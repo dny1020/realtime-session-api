@@ -1,3 +1,5 @@
+FROM python:3.11-slim
+
 # Docker Image Labels
 LABEL org.opencontainers.image.title="Contact Center API"
 LABEL org.opencontainers.image.description="Production-ready Contact Center API with Asterisk ARI integration"
@@ -6,8 +8,6 @@ LABEL org.opencontainers.image.url="https://github.com/YOUR_USERNAME/api_contact
 LABEL org.opencontainers.image.source="https://github.com/YOUR_USERNAME/api_contact_center"
 LABEL org.opencontainers.image.documentation="https://github.com/YOUR_USERNAME/api_contact_center/blob/main/README.md"
 LABEL org.opencontainers.image.licenses="MIT"
-
-FROM python:3.11-slim
 
 # Established the working directory
 WORKDIR /app
