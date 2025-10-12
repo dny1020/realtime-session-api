@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     # Rate limiting
     rate_limit_requests: int = Field(default=10, description="Rate limit requests per window")
     rate_limit_window: int = Field(default=60, description="Rate limit window in seconds")
+    
+    # Metrics
+    metrics_enabled: bool = Field(default=True, description="Enable Prometheus metrics endpoint")
 
     # Asterisk connection pooling
     ari_max_keepalive: int = Field(default=20, description="Max keepalive connections to ARI")

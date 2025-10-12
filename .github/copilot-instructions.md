@@ -3,16 +3,16 @@
 Purpose
 - This repository exposes a minimal Python FastAPI service to trigger single outbound IVR calls via Asterisk ARI and to query their status; no predictive or campaign-style dialing is in scope. Focus on per-number call origination and status queries only.
 - Primary endpoints:
-  - POST /api/v2/interaction/{number}: Initiate a call to a specific number (connect to IVR context or play audio).
-  - GET /api/v2/status/{call_id}: Retrieve call status (pending, ringing, answered, failed).
+  - POST /api/v1/interaction/{number}: Initiate a call to a specific number (connect to IVR context or play audio).
+  - GET /api/v1/status/{call_id}: Retrieve call status (pending, ringing, answered, failed).
   - RESTful alternatives:
-    - POST /api/v2/calls: Create a call by body payload.
-    - GET /api/v2/calls/{call_id}: Get call details/status.
+    - POST /api/v1/calls: Create a call by body payload.
+    - GET /api/v1/calls/{call_id}: Get call details/status.
 
 Tech stack and components
 - Language/runtime: Python 3.x; framework: FastAPI; persistence: PostgreSQL via SQLAlchemy (production) with optional DB-disabled mode for local dev; telephony control: Asterisk ARI (HTTP/WebSocket).
 - Packaging/deploy: Docker optional; reverse proxy: Traefik optional; metrics: Prometheus (scrapes /metrics when enabled), dashboards: Grafana (not exposed by default).
-- Authentication: OAuth2 Password Grant for JWT at POST /api/v2/token; tokens carry sub, iat, exp, optionally iss/aud; passwords stored hashed (bcrypt).
+- Authentication: OAuth2 Password Grant for JWT at POST /api/v1/token; tokens carry sub, iat, exp, optionally iss/aud; passwords stored hashed (bcrypt).
 
 Scope and non-goals
 - In-scope: Single-call origination via Asterisk ARI, basic IVR/audio playback, call status tracking/queries, minimal persistence for calls (production).
@@ -53,15 +53,15 @@ Build, run, and validate
   - Ensure DATABASE_URL, SECRET_KEY, ARI_* vars are set; DISABLE_DB not set or false.
   - Run via uvicorn or container entrypoint; front with a reverse proxy (e.g., Traefik) with HTTPS.
 - Validation steps the agent should rely on:
-  - Token retrieval at POST /api/v2/token succeeds only when DB is enabled and users exist with hashed passwords.
+  - Token retrieval at POST /api/v1/token succeeds only when DB is enabled and users exist with hashed passwords.
   - Protected endpoints require Authorization: Bearer <token>.
   - /metrics is reachable only when METRICS_ENABLED=true; avoid leaking high-cardinality labels.
 
 API contracts (behavior Copilot must preserve)
-- POST /api/v2/interaction/{number}
+- POST /api/v1/interaction/{number}
   - Body fields: context, extension, priority, timeout, caller_id (defaults apply if missing).
   - Response includes: success, call_id (UUID), phone_number, message, channel, status (e.g., dialing), created_at.
-- GET /api/v2/status/{call_id}
+- GET /api/v1/status/{call_id}
   - Response includes: call_id, phone_number, status, channel, context, extension, caller_id, timestamps (created_at, dialed_at, answered_at, ended_at), duration, failure_reason, attempt_number, is_active, is_completed.
 - RESTful alternatives remain consistent with above behaviors and schemas.
 
@@ -89,11 +89,11 @@ Guardrails for suggestions
 
 Quick examples Copilot can rely on (for tests and docs)
 - JWT token:
-  - POST /api/v2/token with application/x-www-form-urlencoded: username, password; returns access_token and token_type.
+  - POST /api/v1/token with application/x-www-form-urlencoded: username, password; returns access_token and token_type.
 - Originate single call:
-  - POST /api/v2/interaction/+1234567890 with JSON body including context, extension, priority, timeout, caller_id; returns success, call_id, status=dialing, channel.
+  - POST /api/v1/interaction/+1234567890 with JSON body including context, extension, priority, timeout, caller_id; returns success, call_id, status=dialing, channel.
 - Check status:
-  - GET /api/v2/status/{call_id}; returns status fields and timestamps as available.
+  - GET /api/v1/status/{call_id}; returns status fields and timestamps as available.
 
 Acceptance checklist before proposing changes
 - Code compiles, server starts locally with DISABLE_DB=true and ARI configured.

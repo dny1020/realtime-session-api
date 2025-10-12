@@ -80,11 +80,11 @@ Access the API at `http://localhost:8000/docs`
 
 | Method | Endpoint | Description | Auth Required |
 |--------|----------|-------------|---------------|
-| POST | `/api/v2/token` | Obtain JWT access token | No |
-| POST | `/api/v2/interaction/{number}` | Initiate call to a phone number | Yes |
-| GET | `/api/v2/status/{call_id}` | Get call status | Yes |
-| POST | `/api/v2/calls` | Create call (RESTful alternative) | Yes |
-| GET | `/api/v2/calls/{call_id}` | Get call details | Yes |
+| POST | `/api/v1/token` | Obtain JWT access token | No |
+| POST | `/api/v1/interaction/{number}` | Initiate call to a phone number | Yes |
+| GET | `/api/v1/status/{call_id}` | Get call status | Yes |
+| POST | `/api/v1/calls` | Create call (RESTful alternative) | Yes |
+| GET | `/api/v1/calls/{call_id}` | Get call details | Yes |
 | GET | `/health` | Health check (DB + Asterisk) | No |
 | GET | `/docs` | Swagger UI documentation | No |
 | GET | `/redoc` | ReDoc documentation | No |
@@ -94,7 +94,7 @@ Access the API at `http://localhost:8000/docs`
 ### 1. Obtain Access Token
 
 ```bash
-curl -X POST http://localhost:8000/api/v2/token \
+curl -X POST http://localhost:8000/api/v1/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=yourpassword"
 ```
@@ -112,7 +112,7 @@ curl -X POST http://localhost:8000/api/v2/token \
 ```bash
 TOKEN="your_access_token_here"
 
-curl -X POST http://localhost:8000/api/v2/interaction/+1234567890 \
+curl -X POST http://localhost:8000/api/v1/interaction/+1234567890 \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -136,7 +136,7 @@ curl -X POST http://localhost:8000/api/v2/interaction/+1234567890 \
 ### 3. Check Call Status
 
 ```bash
-curl -X GET http://localhost:8000/api/v2/status/c4ca4238-a0b9-3382-8dcc-509a6f75849b \
+curl -X GET http://localhost:8000/api/v1/status/c4ca4238-a0b9-3382-8dcc-509a6f75849b \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -171,9 +171,9 @@ curl -X GET http://localhost:8000/api/v2/status/c4ca4238-a0b9-3382-8dcc-509a6f75
 │  │  JWT Auth + Rate Limiting      │  │
 │  ├────────────────────────────────┤  │
 │  │  REST Endpoints                │  │
-│  │  /api/v2/interaction/{number}  │  │
-│  │  /api/v2/status/{call_id}      │  │
-│  │  /api/v2/calls                 │  │
+│  │  /api/v1/interaction/{number}  │  │
+│  │  /api/v1/status/{call_id}      │  │
+│  │  /api/v1/calls                 │  │
 │  └────────────────────────────────┘  │
 └───────┬──────────────────────┬───────┘
         │                      │
@@ -453,7 +453,7 @@ This project implements multiple security layers:
 
 - ✅ **JWT Authentication** - Secure token-based access control
 - ✅ **Password Hashing** - Bcrypt with salt for password storage
-- ✅ **Rate Limiting** - In-memory rate limiter on sensitive endpoints (10 req/60s on `/api/v2/token`)
+- ✅ **Rate Limiting** - In-memory rate limiter on sensitive endpoints (10 req/60s on `/api/v1/token`)
 - ✅ **Input Validation** - Pydantic models for all requests
 - ✅ **SQL Injection Protection** - ORM-based queries only
 - ✅ **CORS Configuration** - Configurable allowed origins

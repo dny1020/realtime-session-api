@@ -47,7 +47,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 
 class SimpleRateLimitMiddleware(BaseHTTPMiddleware):
-    """Very simple in-memory rate limiter for sensitive endpoints like /api/v2/token.
+    """Very simple in-memory rate limiter for sensitive endpoints like /api/v1/token.
     WARNING: Not distributed; for multi-instance deployments replace with Redis or Traefik plugin.
     """
 
@@ -57,7 +57,7 @@ class SimpleRateLimitMiddleware(BaseHTTPMiddleware):
         self.limit = limit if limit is not None else settings_obj.rate_limit_requests
         self.window = window_seconds if window_seconds is not None else settings_obj.rate_limit_window
         self.buckets: defaultdict[str, deque] = defaultdict(deque)
-        self.protected_paths = {"/api/v2/token"}
+        self.protected_paths = {"/api/v1/token"}
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in self.protected_paths:
@@ -210,8 +210,8 @@ app.add_middleware(RequestIDMiddleware)
 app.add_middleware(SimpleRateLimitMiddleware)
 
 # Include routes
-app.include_router(interaction.router, prefix="/api/v2", tags=["Interaction"])
-app.include_router(auth_routes.router, prefix="/api/v2", tags=["Auth"])
+app.include_router(interaction.router, prefix="/api/v1", tags=["Interaction"])
+app.include_router(auth_routes.router, prefix="/api/v1", tags=["Auth"])
 
 # Mount Prometheus metrics endpoint
 if settings.metrics_enabled:
@@ -227,7 +227,7 @@ async def root():
         "version": settings.app_version,
         "docs": "/docs",
         "health": "/health",
-        "auth_token": "/api/v2/token"
+        "auth_token": "/api/v1/token"
     }
 
 
@@ -274,3 +274,4 @@ if __name__ == "__main__":
         reload=settings.debug,
         log_level=settings.log_level.lower()
     )
+    

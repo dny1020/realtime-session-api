@@ -210,6 +210,12 @@ def transition_call_status(
                     "context": context,
                 }
             )
+            # Track successful transition in metrics
+            try:
+                from app.services.metrics import track_state_transition
+                track_state_transition(call.status.value, new_status.value, True)
+            except ImportError:
+                pass  # Metrics not available
         call.status = new_status
         return True
     else:
@@ -223,4 +229,10 @@ def transition_call_status(
                 "reason": error_msg,
             }
         )
+        # Track rejected transition in metrics
+        try:
+            from app.services.metrics import track_state_transition
+            track_state_transition(call.status.value, new_status.value, False)
+        except ImportError:
+            pass  # Metrics not available
         return False

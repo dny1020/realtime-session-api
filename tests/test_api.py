@@ -36,12 +36,12 @@ def test_docs_available(client):
 
 def test_token_endpoint_exists(client):
     """Test token endpoint exists (will fail without credentials)"""
-    response = client.post("/api/v2/token")
+    response = client.post("/api/v1/token")
     # Should return 422 (validation error) or 503 (DB disabled)
     assert response.status_code in [422, 503]
 
 
 def test_protected_endpoint_without_auth(client):
     """Test that protected endpoints require authentication"""
-    response = client.post("/api/v2/interaction/1234567890")
+    response = client.post("/api/v1/interaction/1234567890")
     assert response.status_code == 401  # Unauthorized

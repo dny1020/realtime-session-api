@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from config.settings import get_settings
 
 settings = get_settings()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v2/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/token")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
