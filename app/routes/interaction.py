@@ -1,18 +1,21 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Path
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import Dict
-from typing import Optional, Annotated
+from typing import Optional, Dict, Annotated
 from pydantic import BaseModel, Field
 import json
 import uuid
+import asyncio
 from datetime import datetime
-from loguru import logger
 
 from app.database import get_db
 from app.services.asterisk import get_asterisk_service, AsteriskService
 from app.models.call import Call, CallStatus
 from config.settings import get_settings
 from app.auth.jwt import get_current_user
+from app.services.metrics import (
+    track_call_originated,
+    call_origination_latency,
+)
 
 settings = get_settings()
 router = APIRouter()
@@ -65,74 +68,74 @@ class CallStatusResponse(BaseModel):
     is_completed: bool
 
 
+def _get_effective_params(call_request: Optional[CallRequest]) -> Dict[str, any]:
+    """Extract effective parameters with fallback to defaults"""
+    return {
+        'context': call_request.context if call_request and call_request.context else settings.default_context,
+        'extension': call_request.extension if call_request and call_request.extension else settings.default_extension,
+        'priority': call_request.priority if call_request and call_request.priority is not None else settings.default_priority,
+        'timeout': call_request.timeout if call_request and call_request.timeout is not None else settings.default_timeout,
+        'caller_id': call_request.caller_id if call_request and call_request.caller_id else settings.default_caller_id,
+        'variables': call_request.variables if call_request and call_request.variables else None,
+    }
+
+
 @router.post("/interaction/{number}", response_model=CallResponse)
 async def originate_call(
-    number: Annotated[str, Path(description="Phone number in E.164 or digits with optional +", min_length=7, max_length=20, pattern=r"^[+0-9]+$")],
+    number: Annotated[str, Field(description="Phone number in E.164 or digits with optional +", min_length=7, max_length=20, pattern=r"^[+0-9]+$")],
     call_request: Optional[CallRequest] = None,
     asterisk_service: AsteriskService = Depends(get_asterisk_service),
     db: Optional[Session] = Depends(get_db),
     current_user: str = Depends(get_current_user),
 ):
-    """
-    Originate an outbound call to a specific number
-    
-    Args:
-        number: Phone number to call
-        call_request: Optional call parameters
-        asterisk_service: Asterisk service
-        db: Database session
+    """Originate an outbound call to a specific number"""
+    params = _get_effective_params(call_request)
 
-    Returns:
-        CallResponse: Information about the originated call
-    """
-
-    # Compute effective parameters with defaults
-    effective_context = (call_request.context if call_request and call_request.context else settings.default_context)
-    effective_extension = (call_request.extension if call_request and call_request.extension else settings.default_extension)
-    effective_priority = (call_request.priority if call_request and call_request.priority is not None else settings.default_priority)
-    effective_timeout = (call_request.timeout if call_request and call_request.timeout is not None else settings.default_timeout)
-    effective_caller_id = (call_request.caller_id if call_request and call_request.caller_id else settings.default_caller_id)
-    effective_vars = (call_request.variables if call_request and call_request.variables else None)
-
-    # Generate unique ID for the call
     call_id = str(uuid.uuid4())
+    db_call = None
     
     try:
-        # Create call record in database (if DB enabled)
-        if db is not None and not settings.disable_db:
+        # Create call record in database (if enabled)
+        if db is not None:
             db_call = Call(
                 call_id=call_id,
                 phone_number=number,
                 status=CallStatus.PENDING,
-                context=effective_context,
-                extension=effective_extension,
-                priority=effective_priority,
-                timeout=effective_timeout,
-                caller_id=effective_caller_id,
-                call_metadata=json.dumps(effective_vars) if effective_vars else None,
+                context=params['context'],
+                extension=params['extension'],
+                priority=params['priority'],
+                timeout=params['timeout'],
+                caller_id=params['caller_id'],
+                call_metadata=json.dumps(params['variables']) if params['variables'] else None,
             )
             db.add(db_call)
             db.commit()
             db.refresh(db_call)
 
-        # Execute directly (no Celery/Workers in this version)
+        # Originate call via Asterisk ARI with timing
+        start_time = asyncio.get_event_loop().time()
         asterisk_result = await asterisk_service.originate_call(
             phone_number=number,
-            context=effective_context,
-            extension=effective_extension,
-            priority=effective_priority,
-            timeout=effective_timeout,
-            caller_id=effective_caller_id,
-            variables=effective_vars,
+            context=params['context'],
+            extension=params['extension'],
+            priority=params['priority'],
+            timeout=params['timeout'],
+            caller_id=params['caller_id'],
+            variables=params['variables'],
         )
+        latency = asyncio.get_event_loop().time() - start_time
+        call_origination_latency.observe(latency)
         
         if asterisk_result["success"]:
-            # Update record with Asterisk information
-            if db is not None and not settings.disable_db:
+            # Update record with Asterisk channel info
+            if db_call:
                 db_call.status = CallStatus.DIALING
                 db_call.dialed_at = datetime.utcnow()
                 db_call.channel = asterisk_result.get("channel")
                 db.commit()
+            
+            # Track successful origination
+            track_call_originated(success=True)
             
             return CallResponse(
                 success=True,
@@ -144,12 +147,15 @@ async def originate_call(
                 created_at=datetime.utcnow()
             )
         else:
-            # Update record with error
-            if db is not None and not settings.disable_db:
+            # Update record with failure
+            if db_call:
                 db_call.status = CallStatus.FAILED
                 db_call.failure_reason = asterisk_result.get("error", "Unknown error")
                 db_call.ended_at = datetime.utcnow()
                 db.commit()
+            
+            # Track failed origination
+            track_call_originated(success=False)
             
             return CallResponse(
                 success=False,
@@ -162,18 +168,17 @@ async def originate_call(
             )
             
     except Exception as e:
-        if db is not None and not settings.disable_db:
+        if db:
             db.rollback()
-        
-        # Try to update call record as failed if it was created
-        try:
-            if db is not None and not settings.disable_db and 'db_call' in locals():
-                db_call.status = CallStatus.FAILED
-                db_call.failure_reason = str(e)
-                db_call.ended_at = datetime.utcnow()
-                db.commit()
-        except Exception:
-            pass
+            # Try to mark call as failed
+            if db_call:
+                try:
+                    db_call.status = CallStatus.FAILED
+                    db_call.failure_reason = str(e)
+                    db_call.ended_at = datetime.utcnow()
+                    db.commit()
+                except Exception:
+                    pass
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -182,32 +187,20 @@ async def originate_call(
 
 
 @router.get("/interaction/{call_id}/status", response_model=CallStatusResponse)
+@router.get("/status/{call_id}", response_model=CallStatusResponse)
+@router.get("/calls/{call_id}", response_model=CallStatusResponse, tags=["Calls"])
 async def get_call_status(
-    call_id: Annotated[str, Path(description="Call ID (UUID)", min_length=8, max_length=255)],
+    call_id: Annotated[str, Field(description="Call ID (UUID)", min_length=8, max_length=255)],
     db: Optional[Session] = Depends(get_db),
     current_user: str = Depends(get_current_user),
 ):
-    """
-    Get the current status of a call by its ID.
+    """Get the current status of a call by its ID"""
+    if not db:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database disabled")
     
-    Args:
-        call_id: Call ID
-        db: Database session
-
-    Returns:
-        CallStatusResponse: Call status information
-    """
-    
-    # Search call in database
-    if settings.disable_db or db is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="DB disabled")
     db_call = db.query(Call).filter(Call.call_id == call_id).first()
-    
     if not db_call:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Call not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
     
     return CallStatusResponse(
         call_id=db_call.call_id,
@@ -229,17 +222,6 @@ async def get_call_status(
     )
 
 
-# Alias : GET /api/v2/status/{call_id}
-@router.get("/status/{call_id}", response_model=CallStatusResponse)
-async def get_call_status_alias(
-    call_id: Annotated[str, Path(description="Call ID (UUID)", min_length=8, max_length=255)],
-    db: Optional[Session] = Depends(get_db),
-    current_user: str = Depends(get_current_user),
-):
-    return await get_call_status(call_id, db, current_user)
-
-
-# RESTful aliases (resource calls)
 @router.post("/calls", response_model=CallResponse, tags=["Calls"])
 async def create_call(
     payload: CallCreate,
@@ -247,8 +229,7 @@ async def create_call(
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user),
 ):
-    """Make a call as resource REST: POST /calls
-    """
+    """Create a new outbound call (RESTful endpoint)"""
     return await originate_call(
         number=payload.phone_number,
         call_request=payload,
@@ -256,13 +237,3 @@ async def create_call(
         db=db,
         current_user=current_user,
     )
-
-
-@router.get("/calls/{call_id}", response_model=CallStatusResponse, tags=["Calls"])
-async def get_call(
-    call_id: str,
-    db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user),
-):
-    """Get call resource: GET /calls/{call_id}"""
-    return await get_call_status(call_id, db, current_user)

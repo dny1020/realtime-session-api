@@ -1,6 +1,5 @@
 from sqlalchemy import Column, Integer, String, DateTime, Text, Enum as SQLEnum, Index, CheckConstraint
 from sqlalchemy.sql import func
- 
 
 from . import Base, CallStatus
 
@@ -11,7 +10,6 @@ class Call(Base):
         Index("ix_calls_created_at", "created_at"),
         Index("ix_calls_status_created", "status", "created_at"),
         CheckConstraint("attempt_number >= 1", name="ck_calls_attempt_number_ge_1"),
-        CheckConstraint("max_attempts >= 1", name="ck_calls_max_attempts_ge_1"),
         CheckConstraint("timeout > 0", name="ck_calls_timeout_pos"),
         CheckConstraint(
             "char_length(phone_number) >= 7 AND char_length(phone_number) <= 20",
@@ -20,9 +18,9 @@ class Call(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    call_id = Column(String(255), unique=True, index=True, nullable=False)  # ID unique of Asterisk
+    call_id = Column(String(255), unique=True, index=True, nullable=False)
     
-    # call details
+    # Call details
     phone_number = Column(String(20), nullable=False, index=True)
     caller_id = Column(String(50), default="Outbound Call", nullable=False)
     
@@ -33,11 +31,8 @@ class Call(Base):
     priority = Column(Integer, default=1, nullable=False)
     timeout = Column(Integer, default=30000, nullable=False)
     
-    # Campaign fields removed (single-call API only)
-
-    # call details
-    channel = Column(String(255), nullable=True)  # Canal de Asterisk
-    unique_id = Column(String(255), nullable=True, index=True)  # UniqueID de Asterisk
+    # Asterisk channel
+    channel = Column(String(255), nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -47,14 +42,12 @@ class Call(Base):
 
     # Duration in seconds
     duration = Column(Integer, nullable=True)
-    billable_duration = Column(Integer, nullable=True)
 
     # Failure reason (if any)
     failure_reason = Column(String(255), nullable=True)
 
-    # Call attempts
+    # Call attempt number
     attempt_number = Column(Integer, default=1, nullable=False)
-    max_attempts = Column(Integer, default=3, nullable=False)
     
     # Metadata (JSON as text)
     call_metadata = Column(Text, nullable=True)
@@ -64,7 +57,7 @@ class Call(Base):
     
     @property
     def is_active(self):
-        """Return True if the call is in progress (not yet answered or completed)"""
+        """Return True if the call is in progress"""
         return self.status in [CallStatus.PENDING, CallStatus.DIALING, CallStatus.RINGING]
     
     @property

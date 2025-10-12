@@ -1,9 +1,17 @@
-from fastapi import FastAPI, Depends, Response
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 import uvicorn
 from typing import Optional
+import uuid
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+import time
+from collections import defaultdict, deque
+from datetime import datetime
+from prometheus_client import make_asgi_app
 
 from config.settings import get_settings
 from app.services.asterisk import get_asterisk_service, AsteriskService
@@ -12,13 +20,13 @@ from app.models import Base, CallStatus
 from app.routes import interaction
 from app.routes import auth as auth_routes
 from app.middleware.logging_middleware import JSONLoggingMiddleware
+from app.services.call_state_machine import transition_call_status
+from app.services.metrics import (
+    track_ari_event,
+    track_ari_connection,
+    track_rate_limit_exceeded,
+)
 from loguru import logger
-import uuid
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-import time
-from collections import defaultdict, deque
-from datetime import datetime
 
 settings = get_settings()
 
@@ -60,6 +68,7 @@ class SimpleRateLimitMiddleware(BaseHTTPMiddleware):
             while bucket and now - bucket[0] > self.window:
                 bucket.popleft()
             if len(bucket) >= self.limit:
+                track_rate_limit_exceeded(request.url.path)
                 return Response(status_code=429, content="Too Many Requests")
             bucket.append(now)
         return await call_next(request)
@@ -70,10 +79,15 @@ async def handle_ari_event(event: dict):
     from app.database import SessionLocal
     from app.models.call import Call
     
+    event_type = event.get("type")
+    
+    # Track event received
+    if event_type:
+        track_ari_event(event_type, processed=False)
+    
     if settings.disable_db:
         return
     
-    event_type = event.get("type")
     channel = event.get("channel", {})
     channel_id = channel.get("id")
     
@@ -82,84 +96,88 @@ async def handle_ari_event(event: dict):
     
     db = SessionLocal()
     try:
-        # Find call by channel ID
         call = db.query(Call).filter(Call.channel == channel_id).first()
         if not call:
             return
         
         logger.info(f"Processing ARI event {event_type} for call {call.call_id}")
         
-        # Update call status based on event
+        # Update call status based on event using state machine validation
         if event_type == "StasisStart":
-            call.status = CallStatus.DIALING
-            call.dialed_at = datetime.utcnow()
+            if transition_call_status(call, CallStatus.DIALING, context=f"ARI: {event_type}"):
+                call.dialed_at = datetime.utcnow()
+                
         elif event_type == "ChannelStateChange":
             state = channel.get("state")
             if state == "Ringing":
-                call.status = CallStatus.RINGING
+                transition_call_status(call, CallStatus.RINGING, context=f"ARI: {event_type}")
             elif state == "Up":
-                call.status = CallStatus.ANSWERED
-                if not call.answered_at:
-                    call.answered_at = datetime.utcnow()
+                if transition_call_status(call, CallStatus.ANSWERED, context=f"ARI: {event_type}"):
+                    if not call.answered_at:
+                        call.answered_at = datetime.utcnow()
+                        
         elif event_type == "ChannelDestroyed":
             cause = channel.get("cause")
             cause_txt = channel.get("cause_txt", "")
             
+            # Determine appropriate terminal status
             if call.status == CallStatus.ANSWERED:
-                call.status = CallStatus.COMPLETED
+                new_status = CallStatus.COMPLETED
             elif "BUSY" in cause_txt.upper() or cause == 17:
-                call.status = CallStatus.BUSY
+                new_status = CallStatus.BUSY
             elif "NO_ANSWER" in cause_txt.upper() or cause == 19:
-                call.status = CallStatus.NO_ANSWER
+                new_status = CallStatus.NO_ANSWER
             else:
-                call.status = CallStatus.FAILED
+                new_status = CallStatus.FAILED
                 call.failure_reason = cause_txt or f"Cause {cause}"
             
-            call.ended_at = datetime.utcnow()
-            if call.answered_at:
-                duration = (call.ended_at - call.answered_at).total_seconds()
-                call.duration = int(duration)
+            if transition_call_status(call, new_status, context=f"ARI: {event_type}"):
+                call.ended_at = datetime.utcnow()
+                if call.answered_at:
+                    call.duration = int((call.ended_at - call.answered_at).total_seconds())
         
         db.commit()
-        logger.info(f"Updated call {call.call_id} status to {call.status.value}")
+        logger.info(f"Updated call {call.call_id} to status {call.status.value}")
+        
+        # Mark event as successfully processed
+        if event_type:
+            track_ari_event(event_type, processed=True, failed=False)
         
     except Exception as e:
         db.rollback()
-        logger.error(f"Error handling ARI event: {e}", extra={"event": event})
+        logger.error(f"Error handling ARI event: {e}")
+        
+        # Mark event as failed
+        if event_type:
+            track_ari_event(event_type, processed=False, failed=True)
     finally:
         db.close()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manager life cycle of the application"""
-    # Startup
+    """Manage application lifecycle"""
     logger.info("Starting Contact Center API...")
 
-    # Create tables only in debug mode; in production use Alembic migrations
-    if settings.debug and not settings.disable_db and engine is not None:
+    # Create tables in debug mode only (production uses Alembic)
+    if settings.debug and not settings.disable_db and engine:
         Base.metadata.create_all(bind=engine)
-        logger.info("Database initialized (debug)")
+        logger.info("Database initialized (debug mode)")
 
-    # Connect to Asterisk ARI (WebSocket + HTTP)
+    # Connect to Asterisk ARI
     asterisk_service = await get_asterisk_service()
     try:
-        connected = await asterisk_service.connect()
-        if connected:
+        if await asterisk_service.connect():
             logger.info("Connected to Asterisk ARI (HTTP + WebSocket)")
-            # Register event handler for call status updates
             asterisk_service.register_event_handler("*", handle_ari_event)
         else:
-            logger.warning("Asterisk ARI connection not established (test/dev mode or error)")
+            logger.warning("Asterisk ARI connection not established")
     except Exception as e:
         logger.error(f"Error connecting to ARI: {e}")
 
     yield
     
-    # Shutdown
     logger.info("Shutting down Contact Center API...")
-
-    # Disconnect from Asterisk ARI
     try:
         await asterisk_service.disconnect()
         logger.info("Disconnected from Asterisk ARI")
@@ -195,6 +213,11 @@ app.add_middleware(SimpleRateLimitMiddleware)
 app.include_router(interaction.router, prefix="/api/v2", tags=["Interaction"])
 app.include_router(auth_routes.router, prefix="/api/v2", tags=["Auth"])
 
+# Mount Prometheus metrics endpoint
+if settings.metrics_enabled:
+    metrics_app = make_asgi_app()
+    app.mount("/metrics", metrics_app)
+
 
 @app.get("/")
 async def root():
@@ -214,28 +237,28 @@ async def health_check(
     db: Optional[Session] = Depends(get_db)
 ):
     """System health check endpoint"""
-    # Check database connection
-    if settings.disable_db or db is None:
-        db_status = "disabled"
-    else:
+    db_status = "disabled" if not db else "ok"
+    if db:
         try:
             db.execute("SELECT 1")
-            db_status = "ok"
         except Exception as e:
             db_status = f"error: {str(e)}"
 
-    # Check connection to Asterisk (ARI)
-    asterisk_status = "ok" if await asterisk_service.is_connected() else "disconnected"
+    http_ok = asterisk_service._connected_ok
+    ws_ok = asterisk_service._ws_connected
+    asterisk_status = "ok" if http_ok and ws_ok else "degraded"
+    
+    # Update metrics
+    track_ari_connection(http_ok, ws_ok)
     
     return {
-        "status": "ok",
+        "status": "ok" if db_status in ("ok", "disabled") and asterisk_status == "ok" else "degraded",
         "version": settings.app_version,
         "database": db_status,
-        "asterisk": asterisk_status,
-        "services": {
-            "api": "running",
-            "database": db_status,
-            "asterisk_ari": asterisk_status
+        "asterisk": {
+            "status": asterisk_status,
+            "http": "connected" if http_ok else "disconnected",
+            "websocket": "connected" if ws_ok else "disconnected"
         }
     }
 

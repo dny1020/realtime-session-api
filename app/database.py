@@ -3,31 +3,21 @@ from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator, Optional
 
 from config.settings import get_settings
-# from app.models import Base  # not needed here; migrations handle schema
 
 settings = get_settings()
 
-# Make engine database only if DB is enabled
+# Create database engine only if enabled
 if not settings.disable_db:
-    engine = create_engine(
-        settings.database_url,
-        echo=settings.debug  # Show SQL queries in debug mode
-    )
+    engine = create_engine(settings.database_url, echo=settings.debug)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 else:
-    engine = None  # type: ignore
-    SessionLocal = None  # type: ignore
+    engine = None
+    SessionLocal = None
 
 
 def get_db() -> Generator[Optional[Session], None, None]:
-    """
-    Dependency to get a database session
-    
-    Yields:
-        Session: SQLAlchemy session
-    """
+    """Dependency to get a database session"""
     if settings.disable_db:
-        # Minimal mode: do not open connection
         yield None
     else:
         db = SessionLocal()
