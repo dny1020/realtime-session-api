@@ -157,23 +157,28 @@ class TestWebSocketReconnection:
     async def test_websocket_reconnection_on_close(self):
         """Test that WebSocket reconnects after connection closed"""
         from app.services.asterisk import AsteriskService
-        import websockets
+        from websockets.exceptions import ConnectionClosed
         
         service = AsteriskService()
         service._should_reconnect = True
         
-        # Mock websocket that closes immediately
-        mock_ws = AsyncMock()
+        # Create a properly mocked async iterator
+        class MockWebSocket:
+            def __init__(self):
+                self.messages = []
+                
+            def __aiter__(self):
+                return self
+                
+            async def __anext__(self):
+                # Immediately raise ConnectionClosed to simulate disconnect
+                raise ConnectionClosed(None, None)
         
-        async def mock_iter():
-            raise websockets.exceptions.ConnectionClosed(1000, "Normal close")
-        
-        mock_ws.__aiter__.return_value = mock_iter()
+        mock_ws = MockWebSocket()
         
         # Track reconnection attempts
         reconnect_attempts = []
         
-        original_connect = service._ensure_ws_connection
         async def tracked_reconnect():
             reconnect_attempts.append(1)
             return False  # Fail to prevent infinite loop
@@ -186,7 +191,7 @@ class TestWebSocketReconnection:
         task = asyncio.create_task(service._listen_events_with_reconnect())
         
         # Let it try once
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.2)
         service._should_reconnect = False
         task.cancel()
         
@@ -313,7 +318,7 @@ class TestARIEventProcessing:
             }
         }
         
-        with patch('app.main.SessionLocal', return_value=mock_db_session):
+        with patch('app.database.SessionLocal', return_value=mock_db_session):
             with patch('app.main.settings.disable_db', False):
                 await handle_ari_event(event)
         
@@ -342,7 +347,7 @@ class TestARIEventProcessing:
             }
         }
         
-        with patch('app.main.SessionLocal', return_value=mock_db_session):
+        with patch('app.database.SessionLocal', return_value=mock_db_session):
             with patch('app.main.settings.disable_db', False):
                 await handle_ari_event(event)
         
@@ -373,7 +378,7 @@ class TestARIEventProcessing:
             }
         }
         
-        with patch('app.main.SessionLocal', return_value=mock_db_session):
+        with patch('app.database.SessionLocal', return_value=mock_db_session):
             with patch('app.main.settings.disable_db', False):
                 await handle_ari_event(event)
         
@@ -391,6 +396,9 @@ class TestARIEventProcessing:
         mock_call = Mock(spec=Call)
         mock_call.call_id = str(uuid.uuid4())
         mock_call.status = CallStatus.DIALING
+        mock_call.ended_at = None
+        mock_call.answered_at = None
+        mock_call.failure_reason = None
         
         mock_db_session.query.return_value.filter.return_value.first.return_value = mock_call
         
@@ -403,10 +411,11 @@ class TestARIEventProcessing:
             }
         }
         
-        with patch('app.main.SessionLocal', return_value=mock_db_session):
+        with patch('app.database.SessionLocal', return_value=mock_db_session):
             with patch('app.main.settings.disable_db', False):
                 await handle_ari_event(event)
         
+        assert mock_call.ended_at is not None
         mock_db_session.commit.assert_called()
 
 

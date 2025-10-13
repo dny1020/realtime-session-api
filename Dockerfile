@@ -4,9 +4,9 @@ FROM python:3.11-slim
 LABEL org.opencontainers.image.title="Contact Center API"
 LABEL org.opencontainers.image.description="Production-ready Contact Center API with Asterisk ARI integration"
 LABEL org.opencontainers.image.vendor="Contact Center"
-LABEL org.opencontainers.image.url="https://github.com/dny1020/api-contact-center"
-LABEL org.opencontainers.image.source="https://github.com/dny1020/api-contact-center"
-LABEL org.opencontainers.image.documentation="https://github.com/dny1020/api-contact-center/blob/main/README.md"
+LABEL org.opencontainers.image.url="https://github.com/dny1020/api_contact_center"
+LABEL org.opencontainers.image.source="https://github.com/dny1020/api_contact_center"
+LABEL org.opencontainers.image.documentation="https://github.com/dny1020/api_contact_center/blob/main/README.md"
 LABEL org.opencontainers.image.licenses="MIT"
 
 # Established the working directory

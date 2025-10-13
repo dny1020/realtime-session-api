@@ -1,6 +1,6 @@
 # Contact Center API
 
-![CI/CD](https://github.com/dny1020/api-contact-center/workflows/CI%2FCD%20Pipeline/badge.svg)
+![CI/CD](https://github.com/dny1020/api_contact_center/workflows/CI%2FCD%20Pipeline/badge.svg)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Production-ready FastAPI service for **single outbound IVR calls** via Asterisk ARI with real-time WebSocket event tracking.
@@ -8,7 +8,7 @@ Production-ready FastAPI service for **single outbound IVR calls** via Asterisk 
 ## ✨ Features
 
 - 🎯 **Single call origination** - Trigger outbound calls to specific phone numbers
-- 📡 **Real-time events** - WebSocket connection to Asterisk ARI for live status updates
+- 📡 **Real-time WebSocket events** - Live call status updates from Asterisk ARI
 - 🔐 **JWT authentication** - Secure access with bcrypt password hashing
 - 🗄️ **PostgreSQL persistence** - Track call history and status
 - 🐳 **Docker ready** - Multi-platform container images (amd64/arm64)
@@ -46,7 +46,7 @@ make help
 
 ```bash
 # Pull from GitHub Container Registry
-docker pull ghcr.io/dny1020/api-contact-center:latest
+docker pull ghcr.io/dny1020/api_contact_center:latest
 
 # Or start with docker-compose
 docker-compose up -d
@@ -146,13 +146,19 @@ curl -X GET http://localhost:8000/api/v1/status/c4ca4238-a0b9-3382-8dcc-509a6f75
   "call_id": "c4ca4238-a0b9-3382-8dcc-509a6f75849b",
   "phone_number": "+1234567890",
   "status": "answered",
+  "channel": "PJSIP/trunk-00000001",
+  "context": "outbound-ivr",
+  "extension": "s",
+  "caller_id": "CompanyName <+1987654321>",
   "created_at": "2024-10-12T14:30:00.123456",
   "dialed_at": "2024-10-12T14:30:01.234567",
   "answered_at": "2024-10-12T14:30:05.456789",
-  "duration": 45,
-  "context": "outbound-ivr",
-  "extension": "s",
-  "caller_id": "CompanyName <+1987654321>"
+  "ended_at": null,
+  "duration": null,
+  "failure_reason": null,
+  "attempt_number": 1,
+  "is_active": true,
+  "is_completed": false
 }
 ```
 
@@ -163,7 +169,7 @@ curl -X GET http://localhost:8000/api/v1/status/c4ca4238-a0b9-3382-8dcc-509a6f75
 │   Client     │
 │  (cURL/App)  │
 └──────┬───────┘
-       │ HTTPS
+       │ HTTPS/REST
        ▼
 ┌──────────────────────────────────────┐
 │      FastAPI Application             │
@@ -177,25 +183,41 @@ curl -X GET http://localhost:8000/api/v1/status/c4ca4238-a0b9-3382-8dcc-509a6f75
 │  └────────────────────────────────┘  │
 └───────┬──────────────────────┬───────┘
         │                      │
-        │ SQL (ORM)            │ HTTP + WebSocket
+        │ SQL (ORM)            │ HTTP POST (originate)
         ▼                      ▼
-┌───────────────┐      ┌──────────────────┐
-│  PostgreSQL   │      │  Asterisk ARI    │
-│   (Persist    │      │  (External SIP   │
-│   Call Data)  │      │   PBX Service)   │
-└───────────────┘      └──────────────────┘
-                               │
-                               │ SIP/RTP
-                               ▼
-                       ┌──────────────────┐
-                       │   Phone Network  │
-                       │  (Outbound Call) │
-                       └──────────────────┘
+┌───────────────┐      ┌──────────────────────┐
+│  PostgreSQL   │      │  Asterisk ARI        │
+│   (Persist    │◄─────┤  (External SIP PBX)  │
+│   Call Data)  │  WS  │                      │
+│               │Events│  HTTP: /ari/channels │
+└───────────────┘      │  WS: /ari/events     │
+                       └──────────┬───────────┘
+                                  │
+                                  │ SIP/RTP
+                                  ▼
+                          ┌──────────────────┐
+                          │   Phone Network  │
+                          │  (Outbound Call) │
+                          └──────────────────┘
 ```
 
-### Call Flow
+### Event Flow
 
-**Status Progression:**
+**1. Call Origination (HTTP):**
+```
+Client → FastAPI → PostgreSQL (create call record)
+       → Asterisk ARI HTTP POST /channels
+       → Asterisk initiates SIP call
+```
+
+**2. Real-time Updates (WebSocket):**
+```
+Asterisk → WebSocket event → FastAPI event handler
+        → Update PostgreSQL call status
+        → Client can query via GET /status/{call_id}
+```
+
+**3. Status Progression:**
 ```
 pending → dialing → ringing → answered → completed
                            ↘ busy
@@ -203,16 +225,18 @@ pending → dialing → ringing → answered → completed
                            ↘ failed
 ```
 
-1. Client requests call via REST API
-2. FastAPI validates JWT token and creates call record in PostgreSQL
-3. FastAPI sends call origination request to Asterisk ARI (HTTP)
-4. Asterisk establishes WebSocket connection and sends real-time events
-5. FastAPI updates call status in database based on WebSocket events:
-   - `StasisStart` → dialing
-   - `ChannelStateChange` (Ringing) → ringing
-   - `ChannelStateChange` (Up) → answered
-   - `ChannelDestroyed` → completed/busy/no_answer/failed
-6. Client can query updated status at any time via `/status/{call_id}`
+### Call Flow Details
+
+1. **Client requests call** via REST API (`POST /api/v1/interaction/{number}`)
+2. **FastAPI validates** JWT token and creates call record in PostgreSQL
+3. **FastAPI sends** call origination request to Asterisk ARI via HTTP POST
+4. **Asterisk establishes** persistent WebSocket connection and streams events
+5. **FastAPI processes** WebSocket events and updates call status in database:
+   - `StasisStart` → **dialing**
+   - `ChannelStateChange` (Ringing) → **ringing**
+   - `ChannelStateChange` (Up) → **answered**
+   - `ChannelDestroyed` → **completed** / **busy** / **no_answer** / **failed**
+6. **Client queries** updated status at any time via `GET /api/v1/status/{call_id}`
 
 ## 🐳 Docker Images
 
@@ -220,16 +244,16 @@ Pre-built images are available on GitHub Container Registry:
 
 ```bash
 # Pull latest stable version
-docker pull ghcr.io/dny1020/api-contact-center:latest
+docker pull ghcr.io/dny1020/api_contact_center:latest
 
 # Pull specific version tag
-docker pull ghcr.io/dny1020/api-contact-center:v1.0.0
+docker pull ghcr.io/dny1020/api_contact_center:v1.0.0
 
 # Pull development branch
-docker pull ghcr.io/dny1020/api-contact-center:develop
+docker pull ghcr.io/dny1020/api_contact_center:develop
 
 # Pull by commit SHA (for debugging)
-docker pull ghcr.io/dny1020/api-contact-center:main-abc1234
+docker pull ghcr.io/dny1020/api_contact_center:main-abc1234
 ```
 
 **Multi-platform support:** Images are built for `linux/amd64` and `linux/arm64`
@@ -404,11 +428,11 @@ Images are automatically tagged based on the trigger:
 
 ```bash
 # Login to GitHub Container Registry
-echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+echo $GITHUB_TOKEN | docker login ghcr.io -u dny1020 --password-stdin
 
 # Build and push
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/dny1020/api-contact-center:latest \
+  -t ghcr.io/dny1020/api_contact_center:latest \
   --push .
 ```
 
@@ -438,9 +462,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 - **Docker Compose** - Local orchestration
 - **GitHub Actions** - CI/CD automation
 - **pytest** - Testing framework
+- **pytest-asyncio** - Async test support
 - **pytest-cov** - Code coverage
-- **black** - Code formatting
-- **ruff** - Fast Python linter
 - **Loguru** - Structured logging
 
 ### Optional (Production)
@@ -541,8 +564,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Issues:** [GitHub Issues](https://github.com/dny1020/api-contact-center/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/dny1020/api-contact-center/discussions)
+- **Issues:** [GitHub Issues](https://github.com/dny1020/api_contact_center/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/dny1020/api_contact_center/discussions)
 
 ## 🙏 Acknowledgments
 

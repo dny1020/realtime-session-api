@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any, Callable
 from loguru import logger
 import httpx
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 from config.settings import get_settings
 
@@ -154,7 +155,7 @@ class AsteriskService:
                     except Exception as e:
                         logger.error("Error processing ARI event", extra={"error": str(e)})
                         
-            except websockets.exceptions.ConnectionClosed as e:
+            except ConnectionClosed as e:
                 logger.warning(
                     "WebSocket connection closed, will reconnect",
                     extra={"code": e.code, "reason": e.reason}

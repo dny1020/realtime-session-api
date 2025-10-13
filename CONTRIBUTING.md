@@ -20,8 +20,8 @@ By participating in this project, you agree to maintain a respectful and inclusi
 1. **Fork and clone the repository:**
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/api-contact-center.git
-cd api-contact-center
+git clone https://github.com/dny1020/api_contact_center.git
+cd api_contact_center
 ```
 
 2. **Create a virtual environment:**
