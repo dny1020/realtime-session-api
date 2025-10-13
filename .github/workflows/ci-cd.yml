@@ -49,7 +49,7 @@ jobs:
           pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
 
       - name: Upload coverage reports
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         if: always()
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
