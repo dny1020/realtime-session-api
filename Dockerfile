@@ -1,12 +1,12 @@
 FROM python:3.11-slim
 
 # Docker Image Labels
-LABEL org.opencontainers.image.title="Contact Center API"
-LABEL org.opencontainers.image.description="Production-ready Contact Center API with Asterisk ARI integration"
-LABEL org.opencontainers.image.vendor="Contact Center"
-LABEL org.opencontainers.image.url="https://github.com/dny1020/api_contact_center"
-LABEL org.opencontainers.image.source="https://github.com/dny1020/api_contact_center"
-LABEL org.opencontainers.image.documentation="https://github.com/dny1020/api_contact_center/blob/main/README.md"
+LABEL org.opencontainers.image.title="Realtime API"
+LABEL org.opencontainers.image.description="Production-ready Realtime API with Asterisk ARI integration"
+LABEL org.opencontainers.image.vendor="Realtime API"
+LABEL org.opencontainers.image.url="https://github.com/dny1020/realtime-session-api"
+LABEL org.opencontainers.image.source="https://github.com/dny1020/realtime-session-api"
+LABEL org.opencontainers.image.documentation="https://github.com/dny1020/realtime-session-api/blob/main/README.md"
 LABEL org.opencontainers.image.licenses="MIT"
 
 # Established the working directory

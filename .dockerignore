@@ -1,7 +1,7 @@
 # ---- VCS ----
 .git
 .gitignore
-
+.github
 # ---- OS / Editors ----
 .DS_Store
 .vscode/
