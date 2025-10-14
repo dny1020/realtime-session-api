@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 # Docker Image Labels
 LABEL org.opencontainers.image.title="Realtime API"
