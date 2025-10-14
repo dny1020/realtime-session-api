@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 from typing import Optional, List
 
 
@@ -71,6 +71,54 @@ class Settings(BaseSettings):
     # Asterisk connection pooling
     ari_max_keepalive: int = Field(default=20, description="Max keepalive connections to ARI")
     ari_max_connections: int = Field(default=50, description="Max total connections to ARI")
+
+    @field_validator('secret_key')
+    @classmethod
+    def validate_secret_strength(cls, v, info):
+        """Prevent weak secrets in production"""
+        if info.data.get('debug', False):
+            return v  # Allow anything in debug mode
+        
+        # Check length
+        if len(v) < 32:
+            raise ValueError(
+                "SECRET_KEY must be at least 32 characters. "
+                "Generate with: openssl rand -hex 32"
+            )
+        
+        # Check for weak patterns
+        weak = ['password', '123456', 'admin', 'test', 'secret', 
+                'change', 'your-secret', 'CHANGE_ME']
+        for pattern in weak:
+            if pattern in v.lower():
+                raise ValueError(
+                    f"SECRET_KEY contains weak pattern. "
+                    f"Generate strong key: openssl rand -hex 32"
+                )
+        
+        # Check entropy (character diversity)
+        if len(set(v)) < 16:
+            raise ValueError(
+                "SECRET_KEY too repetitive. "
+                "Generate random key: openssl rand -hex 32"
+            )
+        
+        return v
+    
+    @field_validator('allowed_origins')
+    @classmethod
+    def validate_cors(cls, v, info):
+        """Prevent wildcard CORS in production"""
+        if info.data.get('debug', False):
+            return v
+        
+        if '*' in v:
+            raise ValueError(
+                "Wildcard CORS not allowed in production. "
+                "Set specific domains: https://app.example.com"
+            )
+        
+        return v
 
     class Config:
         env_file = ".env"

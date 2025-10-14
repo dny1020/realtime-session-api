@@ -11,7 +11,7 @@ Tests cover:
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch, Mock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import uuid
 
@@ -363,7 +363,7 @@ class TestARIEventProcessing:
         mock_call = Mock(spec=Call)
         mock_call.call_id = str(uuid.uuid4())
         mock_call.status = CallStatus.ANSWERED
-        mock_call.answered_at = datetime.utcnow() - timedelta(seconds=30)
+        mock_call.answered_at = datetime.now(timezone.utc) - timedelta(seconds=30)
         mock_call.ended_at = None
         mock_call.duration = None
         

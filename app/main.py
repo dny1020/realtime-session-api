@@ -10,8 +10,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 import time
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from prometheus_client import make_asgi_app
+import asyncio
+import json
 
 from config.settings import get_settings
 from app.services.asterisk import get_asterisk_service, AsteriskService
@@ -74,6 +76,23 @@ class SimpleRateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """Prevent large request DoS"""
+    def __init__(self, app, max_size: int = 1_000_000):  # 1MB
+        super().__init__(app)
+        self.max_size = max_size
+    
+    async def dispatch(self, request: Request, call_next):
+        if request.headers.get("content-length"):
+            size = int(request.headers["content-length"])
+            if size > self.max_size:
+                return Response(
+                    status_code=413,
+                    content="Request too large"
+                )
+        return await call_next(request)
+
+
 async def handle_ari_event(event: dict):
     """Handle ARI events and update call status in database"""
     from app.database import SessionLocal
@@ -105,7 +124,7 @@ async def handle_ari_event(event: dict):
         # Update call status based on event using state machine validation
         if event_type == "StasisStart":
             if transition_call_status(call, CallStatus.DIALING, context=f"ARI: {event_type}"):
-                call.dialed_at = datetime.utcnow()
+                call.dialed_at = datetime.now(timezone.utc)
                 
         elif event_type == "ChannelStateChange":
             state = channel.get("state")
@@ -114,7 +133,7 @@ async def handle_ari_event(event: dict):
             elif state == "Up":
                 if transition_call_status(call, CallStatus.ANSWERED, context=f"ARI: {event_type}"):
                     if not call.answered_at:
-                        call.answered_at = datetime.utcnow()
+                        call.answered_at = datetime.now(timezone.utc)
                         
         elif event_type == "ChannelDestroyed":
             cause = channel.get("cause")
@@ -132,7 +151,7 @@ async def handle_ari_event(event: dict):
                 call.failure_reason = cause_txt or f"Cause {cause}"
             
             if transition_call_status(call, new_status, context=f"ARI: {event_type}"):
-                call.ended_at = datetime.utcnow()
+                call.ended_at = datetime.now(timezone.utc)
                 if call.answered_at:
                     call.duration = int((call.ended_at - call.answered_at).total_seconds())
         
@@ -154,6 +173,41 @@ async def handle_ari_event(event: dict):
         db.close()
 
 
+async def cleanup_stale_calls():
+    """Mark abandoned calls as failed (runs every 5 minutes)"""
+    from app.database import SessionLocal
+    from app.models.call import Call
+    
+    while True:
+        await asyncio.sleep(300)  # 5 minutes
+        
+        if settings.disable_db:
+            continue
+        
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            stale = db.query(Call).filter(
+                Call.status.in_([CallStatus.PENDING, CallStatus.DIALING, CallStatus.RINGING]),
+                Call.created_at < cutoff
+            ).all()
+            
+            if stale:
+                logger.warning(f"Cleaning up {len(stale)} stale calls")
+                for call in stale:
+                    call.status = CallStatus.FAILED
+                    call.failure_reason = "Timeout: No Asterisk events received"
+                    call.ended_at = datetime.now(timezone.utc)
+                db.commit()
+                logger.info(f"Marked {len(stale)} calls as failed")
+                
+        except Exception as e:
+            logger.error(f"Stale call cleanup error: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle"""
@@ -163,6 +217,33 @@ async def lifespan(app: FastAPI):
     if settings.debug and not settings.disable_db and engine:
         Base.metadata.create_all(bind=engine)
         logger.info("Database initialized (debug mode)")
+    
+    # Check migrations (production only)
+    if not settings.disable_db and not settings.debug:
+        try:
+            from alembic.config import Config
+            from alembic.script import ScriptDirectory
+            from alembic.runtime.migration import MigrationContext
+            
+            alembic_cfg = Config("alembic.ini")
+            script = ScriptDirectory.from_config(alembic_cfg)
+            
+            with engine.begin() as conn:
+                context = MigrationContext.configure(conn)
+                current = context.get_current_revision()
+                head = script.get_current_head()
+                
+                if current != head:
+                    logger.error(
+                        f"Migration mismatch! Current: {current}, Expected: {head}"
+                    )
+                    raise RuntimeError(
+                        "Run migrations: docker-compose run --rm api alembic upgrade head"
+                    )
+                
+                logger.info(f"Migrations OK (rev: {current})")
+        except ImportError:
+            logger.warning("Alembic not installed, skipping check")
 
     # Connect to Asterisk ARI
     asterisk_service = await get_asterisk_service()
@@ -174,8 +255,22 @@ async def lifespan(app: FastAPI):
             logger.warning("Asterisk ARI connection not established")
     except Exception as e:
         logger.error(f"Error connecting to ARI: {e}")
+    
+    # START cleanup task
+    cleanup_task = None
+    if not settings.disable_db:
+        cleanup_task = asyncio.create_task(cleanup_stale_calls())
+        logger.info("Started stale call cleanup task")
 
     yield
+    
+    # STOP cleanup task
+    if cleanup_task:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
     
     logger.info("Shutting down Contact Center API...")
     try:
@@ -203,6 +298,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Additional middleware
+from starlette.middleware.gzip import GZipMiddleware
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(RequestSizeLimitMiddleware, max_size=1_000_000)
 
 # Logging middleware (structured JSON)
 app.add_middleware(JSONLoggingMiddleware)
@@ -261,6 +362,43 @@ async def health_check(
             "websocket": "connected" if ws_ok else "disconnected"
         }
     }
+
+
+@app.get("/readiness")
+async def readiness(
+    asterisk_service: AsteriskService = Depends(get_asterisk_service),
+    db: Optional[Session] = Depends(get_db)
+):
+    """Kubernetes readiness probe - checks if ready to serve traffic"""
+    checks = {}
+    ready = True
+    
+    # Database
+    if db:
+        try:
+            db.execute("SELECT 1")
+            checks["database"] = "ready"
+        except Exception as e:
+            checks["database"] = f"error: {str(e)[:30]}"
+            ready = False
+    else:
+        checks["database"] = "disabled"
+    
+    # Asterisk HTTP
+    if asterisk_service._connected_ok:
+        checks["asterisk_http"] = "ready"
+    else:
+        checks["asterisk_http"] = "not_connected"
+        ready = False
+    
+    # Asterisk WebSocket (don't fail on this - it will reconnect)
+    checks["asterisk_websocket"] = "connected" if asterisk_service._ws_connected else "reconnecting"
+    
+    return Response(
+        content=json.dumps({"ready": ready, "checks": checks}, indent=2),
+        status_code=200 if ready else 503,
+        media_type="application/json"
+    )
 
 
 if __name__ == "__main__":

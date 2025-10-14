@@ -3,6 +3,7 @@ import pytest
 import os
 
 # Set test environment variables
+os.environ["DEBUG"] = "true"  # Allow weak secrets and wildcard CORS in tests
 os.environ["DISABLE_DB"] = "true"
 os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
 os.environ["ARI_HTTP_URL"] = "http://test-asterisk:8088/ari"

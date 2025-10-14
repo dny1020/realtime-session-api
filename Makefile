@@ -19,7 +19,7 @@ NC := \033[0m # No Color
 ##@ Help
 
 help: ## Display this help message
-	@echo "$(GREEN)Contact Center API - Makefile Commands$(NC)"
+	@echo "$(GREEN)Ari API - Makefile Commands$(NC)"
 	@echo ""
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make $(YELLOW)<target>$(NC)\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2 } /^##@/ { printf "\n$(YELLOW)%s$(NC)\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
@@ -299,7 +299,7 @@ version: ## Show version information
 
 info: ## Show project information
 	@echo "$(GREEN)╔════════════════════════════════════════╗$(NC)"
-	@echo "$(GREEN)║     Contact Center API - Info         ║$(NC)"
+	@echo "$(GREEN)║     API Realtime - Info         ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@echo "$(YELLOW)Services:$(NC)"

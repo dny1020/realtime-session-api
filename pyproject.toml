@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "contact-center-api"
 version = "1.0.0"
-description = "Production-ready Contact Center API with Asterisk ARI"
+description = "Production-ready API with ARI"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
