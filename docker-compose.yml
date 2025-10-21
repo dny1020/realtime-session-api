@@ -13,10 +13,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # NO ports exposed - internal network only
     networks:
-      - app-net
+      - internal
+      - traefik_net
     healthcheck:
       test:
         [
@@ -29,6 +29,15 @@ services:
       start_period: 20s
     security_opt:
       - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    restart: unless-stopped
 
   # ------------------------------
   # FastAPI - Contact Center API
@@ -39,8 +48,7 @@ services:
   api:
     build: .
     container_name: contactcenter_api
-    ports:
-      - "8000:8000"
+    # NO ports exposed - access only through Traefik
     environment:
       - APP_NAME=${APP_NAME:-Contact Center API}
       - APP_VERSION=${APP_VERSION:-1.0.0}
@@ -62,9 +70,52 @@ services:
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       - JWT_ISSUER=${JWT_ISSUER:-}
       - JWT_AUDIENCE=${JWT_AUDIENCE:-}
-      - DOCS_ENABLED=${DOCS_ENABLED:-true}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - DOCS_ENABLED=${DOCS_ENABLED:-false}
+      - METRICS_ENABLED=${METRICS_ENABLED:-true}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - PYTHONUNBUFFERED=1
+      - TZ=${TZ:-UTC}
+    labels:
+      # Enable Traefik
+      - "traefik.enable=true"
+      
+      # HTTP Router - Redirect to HTTPS
+      - "traefik.http.routers.contactcenter-api-http.rule=Host(`${DOMAIN_NAME}`)"
+      - "traefik.http.routers.contactcenter-api-http.entrypoints=web"
+      - "traefik.http.routers.contactcenter-api-http.middlewares=redirect-to-https"
+      
+      # HTTPS Router
+      - "traefik.http.routers.contactcenter-api.rule=Host(`${DOMAIN_NAME}`)"
+      - "traefik.http.routers.contactcenter-api.entrypoints=websecure"
+      - "traefik.http.routers.contactcenter-api.tls=true"
+      - "traefik.http.routers.contactcenter-api.tls.certresolver=myresolver"
+      - "traefik.http.routers.contactcenter-api.middlewares=security-headers,rate-limit"
+      
+      # Service Configuration
+      - "traefik.http.services.contactcenter-api.loadbalancer.server.port=8000"
+      - "traefik.http.services.contactcenter-api.loadbalancer.server.scheme=http"
+      - "traefik.http.services.contactcenter-api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.contactcenter-api.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.contactcenter-api.loadbalancer.healthcheck.timeout=5s"
+      
+      # Middlewares
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+      
+      # Security Headers
+      - "traefik.http.middlewares.security-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.security-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.security-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.security-headers.headers.stsPreload=true"
+      - "traefik.http.middlewares.security-headers.headers.customResponseHeaders.X-Robots-Tag=noindex,nofollow"
+      
+      # Rate Limiting
+      - "traefik.http.middlewares.rate-limit.ratelimit.average=100"
+      - "traefik.http.middlewares.rate-limit.ratelimit.burst=50"
+      - "traefik.http.middlewares.rate-limit.ratelimit.period=1s"
+      
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,12 +124,21 @@ services:
       - ./audio:/app/audio
       - ./logs:/app/logs
     networks:
-      - app-net
+      - internal
+      - traefik_net
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -86,7 +146,14 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
 
 networks:
-  app-net:
+  # Internal network for service-to-service communication
+  internal:
     driver: bridge
+    internal: true
+  
+  # External network for Traefik (must be created externally)
+  traefik_net:
+    external: true
