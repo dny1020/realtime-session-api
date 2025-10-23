@@ -6,6 +6,8 @@ __pycache__/
 *.pyo
 *.pyd
 .github/copilot-instructions.md
+!.github/workflows/
+
 
 # C extensions
 *.so
@@ -192,6 +194,8 @@ docker-compose.override.yml
 
 # Alembic
 alembic/versions/*.pyc
+alembic/versions/__pycache__/
+
 
 # Linting and formatting
 .ruff_cache/

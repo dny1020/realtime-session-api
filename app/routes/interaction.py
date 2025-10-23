@@ -16,6 +16,12 @@ from app.services.metrics import (
     track_call_originated,
     call_origination_latency,
 )
+from app.validators import (
+    PhoneNumberValidator,
+    AsteriskContextValidator,
+    AsteriskExtensionValidator,
+    CallerIDValidator,
+)
 
 settings = get_settings()
 router = APIRouter()
@@ -82,14 +88,29 @@ def _get_effective_params(call_request: Optional[CallRequest]) -> Dict[str, any]
 
 @router.post("/interaction/{number}", response_model=CallResponse)
 async def originate_call(
-    number: Annotated[str, Field(description="Phone number in E.164 or digits with optional +", min_length=7, max_length=20, pattern=r"^[+0-9]+$")],
+    number: str,  # Remove Annotated - validation now done by validator
     call_request: Optional[CallRequest] = None,
     asterisk_service: AsteriskService = Depends(get_asterisk_service),
     db: Optional[Session] = Depends(get_db),
     current_user: str = Depends(get_current_user),
 ):
     """Originate an outbound call to a specific number"""
+    
+    # Validate and sanitize phone number
+    try:
+        validated_number = PhoneNumberValidator.validate(number)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid phone number: {str(e)}")
+    
     params = _get_effective_params(call_request)
+    
+    # Validate Asterisk parameters
+    try:
+        params['context'] = AsteriskContextValidator.validate(params['context'])
+        params['extension'] = AsteriskExtensionValidator.validate(params['extension'])
+        params['caller_id'] = CallerIDValidator.sanitize(params['caller_id'])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid parameter: {str(e)}")
 
     call_id = str(uuid.uuid4())
     db_call = None
@@ -99,7 +120,7 @@ async def originate_call(
         if db is not None:
             db_call = Call(
                 call_id=call_id,
-                phone_number=number,
+                phone_number=validated_number,  # Use validated number
                 status=CallStatus.PENDING,
                 context=params['context'],
                 extension=params['extension'],
@@ -115,7 +136,7 @@ async def originate_call(
         # Originate call via Asterisk ARI with timing
         start_time = asyncio.get_event_loop().time()
         asterisk_result = await asterisk_service.originate_call(
-            phone_number=number,
+            phone_number=validated_number,  # Use validated number
             context=params['context'],
             extension=params['extension'],
             priority=params['priority'],
@@ -140,7 +161,7 @@ async def originate_call(
             return CallResponse(
                 success=True,
                 call_id=call_id,
-                phone_number=number,
+                phone_number=validated_number,  # Use validated number
                 message="Call originated successfully",
                 channel=asterisk_result.get("channel"),
                 status=CallStatus.DIALING.value,
@@ -160,7 +181,7 @@ async def originate_call(
             return CallResponse(
                 success=False,
                 call_id=call_id,
-                phone_number=number,
+                phone_number=validated_number,  # Use validated number
                 message="Error originating call",
                 status=CallStatus.FAILED.value,
                 created_at=datetime.utcnow(),

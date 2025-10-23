@@ -20,6 +20,12 @@ class Settings(BaseSettings):
         description="PostgreSQL connection URL"
     )
     disable_db: bool = Field(default=False, description="Disable database usage (minimal mode)")
+    
+    # Redis (for rate limiting, distributed locking, caching)
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection URL"
+    )
 
     # Asterisk host (for reference/logs)
     asterisk_host: str = Field(default="localhost", description="Asterisk host")
@@ -40,8 +46,7 @@ class Settings(BaseSettings):
 
     # JWT
     secret_key: str = Field(
-        default="your-secret-key-change-in-production",
-        description="JWT secret key"
+        description="JWT secret key (REQUIRED - generate with: openssl rand -hex 32)"
     )
     algorithm: str = Field(default="HS256", description="JWT algorithm")
     access_token_expire_minutes: int = Field(default=30, description="Access token expiration in minutes")

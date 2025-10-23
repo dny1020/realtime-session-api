@@ -40,3 +40,7 @@ prometheus-client==0.21.1
 pytest==8.3.3
 pytest-asyncio==0.24.0
 pytest-cov==6.0.0
+
+# Distributed systems dependencies (added for production)
+redis==5.0.1
+aiobreaker==1.4.0
