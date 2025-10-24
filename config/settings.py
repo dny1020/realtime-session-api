@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     )
     disable_db: bool = Field(default=False, description="Disable database usage (minimal mode)")
     
+    # Database pooling (already configured in database.py)
+    db_pool_size: int = Field(default=20, description="Database connection pool size")
+    db_max_overflow: int = Field(default=10, description="Database max overflow connections")
+    db_pool_recycle: int = Field(default=3600, description="Recycle connections after N seconds")
+    
     # Redis (for rate limiting, distributed locking, caching)
     redis_url: str = Field(
         default="redis://localhost:6379/0",
@@ -42,14 +47,13 @@ class Settings(BaseSettings):
     default_timeout: int = Field(default=30000, description="Default timeout in ms")
     default_caller_id: str = Field(default="Outbound Call", description="Default caller ID")
 
-    # Campaign configuration removed (single-call API)
-
     # JWT
     secret_key: str = Field(
         description="JWT secret key (REQUIRED - generate with: openssl rand -hex 32)"
     )
     algorithm: str = Field(default="HS256", description="JWT algorithm")
     access_token_expire_minutes: int = Field(default=30, description="Access token expiration in minutes")
+    refresh_token_expire_days: int = Field(default=7, description="Refresh token expiration in days")
     jwt_issuer: Optional[str] = Field(default=None, description="JWT issuer (iss)")
     jwt_audience: Optional[str] = Field(default=None, description="JWT audience (aud)")
 
@@ -66,9 +70,13 @@ class Settings(BaseSettings):
     upload_dir: str = Field(default="./uploads", description="Upload directory")
     audio_dir: str = Field(default="./audio", description="Audio files directory")
 
-    # Rate limiting
+    # Rate limiting (now using Redis)
     rate_limit_requests: int = Field(default=10, description="Rate limit requests per window")
     rate_limit_window: int = Field(default=60, description="Rate limit window in seconds")
+    
+    # Brute force protection
+    max_failed_login_attempts: int = Field(default=5, description="Max failed login attempts before lockout")
+    login_lockout_duration: int = Field(default=900, description="Login lockout duration in seconds (15 min)")
     
     # Metrics
     metrics_enabled: bool = Field(default=True, description="Enable Prometheus metrics endpoint")
@@ -76,6 +84,31 @@ class Settings(BaseSettings):
     # Asterisk connection pooling
     ari_max_keepalive: int = Field(default=20, description="Max keepalive connections to ARI")
     ari_max_connections: int = Field(default=50, description="Max total connections to ARI")
+    
+    # Circuit breaker configuration
+    circuit_breaker_enabled: bool = Field(default=True, description="Enable circuit breaker for Asterisk")
+    circuit_breaker_fail_threshold: int = Field(default=5, description="Failures before opening circuit")
+    circuit_breaker_timeout: int = Field(default=60, description="Seconds before trying again")
+    
+    # Caching
+    cache_enabled: bool = Field(default=True, description="Enable Redis caching")
+    cache_ttl_call_status: int = Field(default=30, description="Cache TTL for call status (seconds)")
+    
+    # Data retention
+    call_retention_days: int = Field(default=90, description="Days to retain call records")
+    cleanup_interval_minutes: int = Field(default=60, description="Interval between cleanup runs")
+    
+    # Secrets management
+    use_secrets_manager: bool = Field(default=False, description="Use external secrets manager")
+    secrets_manager_type: str = Field(default="aws", description="Type: aws, vault, gcp")
+    aws_secrets_region: Optional[str] = Field(default=None, description="AWS region for secrets")
+    vault_url: Optional[str] = Field(default=None, description="Vault URL")
+    vault_token: Optional[str] = Field(default=None, description="Vault token")
+    
+    # Observability
+    otel_enabled: bool = Field(default=False, description="Enable OpenTelemetry tracing")
+    otel_endpoint: Optional[str] = Field(default=None, description="OpenTelemetry collector endpoint")
+    otel_service_name: str = Field(default="contact-center-api", description="Service name for tracing")
 
     @field_validator('secret_key')
     @classmethod

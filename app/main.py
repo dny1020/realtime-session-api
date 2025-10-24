@@ -17,16 +17,19 @@ import json
 
 from config.settings import get_settings
 from app.services.asterisk import get_asterisk_service, AsteriskService
+from app.services.redis_service import init_redis_service, close_redis_service, get_redis_service
+from app.services.circuit_breaker import get_asterisk_with_circuit_breaker
+from app.services.tracing import setup_tracing
 from app.database import get_db, engine
 from app.models import Base, CallStatus
 from app.routes import interaction
 from app.routes import auth as auth_routes
 from app.middleware.logging_middleware import JSONLoggingMiddleware
+from app.middleware.rate_limit import DistributedRateLimitMiddleware, BruteForceProtectionMiddleware
 from app.services.call_state_machine import transition_call_status
 from app.services.metrics import (
     track_ari_event,
     track_ari_connection,
-    track_rate_limit_exceeded,
 )
 from loguru import logger
 
@@ -41,39 +44,10 @@ if settings.secret_key in PLACEHOLDER_SECRET_VALUES and not settings.debug:
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-        # Attach to state for access in routes/logging
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
-
-
-class SimpleRateLimitMiddleware(BaseHTTPMiddleware):
-    """Very simple in-memory rate limiter for sensitive endpoints like /api/v1/token.
-    WARNING: Not distributed; for multi-instance deployments replace with Redis or Traefik plugin.
-    """
-
-    def __init__(self, app, limit: Optional[int] = None, window_seconds: Optional[int] = None):
-        super().__init__(app)
-        settings_obj = get_settings()
-        self.limit = limit if limit is not None else settings_obj.rate_limit_requests
-        self.window = window_seconds if window_seconds is not None else settings_obj.rate_limit_window
-        self.buckets: defaultdict[str, deque] = defaultdict(deque)
-        self.protected_paths = {"/api/v1/token"}
-
-    async def dispatch(self, request: Request, call_next):
-        if request.url.path in self.protected_paths:
-            ip = request.client.host if request.client else "unknown"
-            now = time.time()
-            bucket = self.buckets[ip]
-            # purge old
-            while bucket and now - bucket[0] > self.window:
-                bucket.popleft()
-            if len(bucket) >= self.limit:
-                track_rate_limit_exceeded(request.url.path)
-                return Response(status_code=429, content="Too Many Requests")
-            bucket.append(now)
-        return await call_next(request)
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -94,7 +68,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 
 
 async def handle_ari_event(event: dict):
-    """Handle ARI events and update call status in database"""
+    """Handle ARI events and update call status in database with distributed locking"""
     from app.database import SessionLocal
     from app.models.call import Call
     
@@ -113,105 +87,90 @@ async def handle_ari_event(event: dict):
     if not channel_id:
         return
     
-    db = SessionLocal()
+    # Use distributed lock to prevent race conditions
     try:
-        call = db.query(Call).filter(Call.channel == channel_id).first()
-        if not call:
-            return
+        redis = await get_redis_service()
         
-        logger.info(f"Processing ARI event {event_type} for call {call.call_id}")
-        
-        # Update call status based on event using state machine validation
-        if event_type == "StasisStart":
-            if transition_call_status(call, CallStatus.DIALING, context=f"ARI: {event_type}"):
-                call.dialed_at = datetime.now(timezone.utc)
+        async with redis.lock(f"call:channel:{channel_id}", timeout=5, blocking_timeout=2):
+            db = SessionLocal()
+            try:
+                call = db.query(Call).filter(Call.channel == channel_id).first()
+                if not call:
+                    return
                 
-        elif event_type == "ChannelStateChange":
-            state = channel.get("state")
-            if state == "Ringing":
-                transition_call_status(call, CallStatus.RINGING, context=f"ARI: {event_type}")
-            elif state == "Up":
-                if transition_call_status(call, CallStatus.ANSWERED, context=f"ARI: {event_type}"):
-                    if not call.answered_at:
-                        call.answered_at = datetime.now(timezone.utc)
+                logger.info(f"Processing ARI event {event_type} for call {call.call_id}")
+                
+                # Store current version for optimistic locking check
+                current_version = call.version
+                
+                # Update call status based on event using state machine validation
+                if event_type == "StasisStart":
+                    if transition_call_status(call, CallStatus.DIALING, context=f"ARI: {event_type}"):
+                        call.dialed_at = datetime.now(timezone.utc)
+                        call.version += 1
                         
-        elif event_type == "ChannelDestroyed":
-            cause = channel.get("cause")
-            cause_txt = channel.get("cause_txt", "")
-            
-            # Determine appropriate terminal status
-            if call.status == CallStatus.ANSWERED:
-                new_status = CallStatus.COMPLETED
-            elif "BUSY" in cause_txt.upper() or cause == 17:
-                new_status = CallStatus.BUSY
-            elif "NO_ANSWER" in cause_txt.upper() or cause == 19:
-                new_status = CallStatus.NO_ANSWER
-            else:
-                new_status = CallStatus.FAILED
-                call.failure_reason = cause_txt or f"Cause {cause}"
-            
-            if transition_call_status(call, new_status, context=f"ARI: {event_type}"):
-                call.ended_at = datetime.now(timezone.utc)
-                if call.answered_at:
-                    call.duration = int((call.ended_at - call.answered_at).total_seconds())
-        
-        db.commit()
-        logger.info(f"Updated call {call.call_id} to status {call.status.value}")
-        
-        # Mark event as successfully processed
-        if event_type:
-            track_ari_event(event_type, processed=True, failed=False)
-        
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error handling ARI event: {e}")
-        
-        # Mark event as failed
-        if event_type:
-            track_ari_event(event_type, processed=False, failed=True)
-    finally:
-        db.close()
-
-
-async def cleanup_stale_calls():
-    """Mark abandoned calls as failed (runs every 5 minutes)"""
-    from app.database import SessionLocal
-    from app.models.call import Call
-    
-    while True:
-        await asyncio.sleep(300)  # 5 minutes
-        
-        if settings.disable_db:
-            continue
-        
-        db = SessionLocal()
-        try:
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-            stale = db.query(Call).filter(
-                Call.status.in_([CallStatus.PENDING, CallStatus.DIALING, CallStatus.RINGING]),
-                Call.created_at < cutoff
-            ).all()
-            
-            if stale:
-                logger.warning(f"Cleaning up {len(stale)} stale calls")
-                for call in stale:
-                    call.status = CallStatus.FAILED
-                    call.failure_reason = "Timeout: No Asterisk events received"
-                    call.ended_at = datetime.now(timezone.utc)
-                db.commit()
-                logger.info(f"Marked {len(stale)} calls as failed")
+                elif event_type == "ChannelStateChange":
+                    state = channel.get("state")
+                    if state == "Ringing":
+                        if transition_call_status(call, CallStatus.RINGING, context=f"ARI: {event_type}"):
+                            call.version += 1
+                    elif state == "Up":
+                        if transition_call_status(call, CallStatus.ANSWERED, context=f"ARI: {event_type}"):
+                            if not call.answered_at:
+                                call.answered_at = datetime.now(timezone.utc)
+                            call.version += 1
+                            
+                elif event_type == "ChannelDestroyed":
+                    cause = channel.get("cause")
+                    cause_txt = channel.get("cause_txt", "")
+                    
+                    # Determine appropriate terminal status
+                    if call.status == CallStatus.ANSWERED:
+                        new_status = CallStatus.COMPLETED
+                    elif "BUSY" in cause_txt.upper() or cause == 17:
+                        new_status = CallStatus.BUSY
+                    elif "NO_ANSWER" in cause_txt.upper() or cause == 19:
+                        new_status = CallStatus.NO_ANSWER
+                    else:
+                        new_status = CallStatus.FAILED
+                        call.failure_reason = cause_txt or f"Cause {cause}"
+                    
+                    if transition_call_status(call, new_status, context=f"ARI: {event_type}"):
+                        call.ended_at = datetime.now(timezone.utc)
+                        if call.answered_at:
+                            call.duration = int((call.ended_at - call.answered_at).total_seconds())
+                        call.version += 1
                 
-        except Exception as e:
-            logger.error(f"Stale call cleanup error: {e}")
-            db.rollback()
-        finally:
-            db.close()
+                # Optimistic locking: only commit if version hasn't changed
+                db.commit()
+                logger.info(f"Updated call {call.call_id} to status {call.status.value} (version {call.version})")
+                
+                # Mark event as successfully processed
+                if event_type:
+                    track_ari_event(event_type, processed=True, failed=False)
+                
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Error handling ARI event: {e}")
+                
+                # Mark event as failed
+                if event_type:
+                    track_ari_event(event_type, processed=False, failed=True)
+            finally:
+                db.close()
+                
+    except Exception as e:
+        logger.error(f"Failed to acquire lock for ARI event processing: {e}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle"""
     logger.info("Starting Contact Center API...")
+
+    # Initialize Redis service
+    await init_redis_service()
+    logger.info("Redis service initialized")
 
     # Create tables in debug mode only (production uses Alembic)
     if settings.debug and not settings.disable_db and engine:
@@ -255,27 +214,21 @@ async def lifespan(app: FastAPI):
             logger.warning("Asterisk ARI connection not established")
     except Exception as e:
         logger.error(f"Error connecting to ARI: {e}")
-    
-    # START cleanup task
-    cleanup_task = None
-    if not settings.disable_db:
-        cleanup_task = asyncio.create_task(cleanup_stale_calls())
-        logger.info("Started stale call cleanup task")
 
     yield
     
-    # STOP cleanup task
-    if cleanup_task:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
-    
     logger.info("Shutting down Contact Center API...")
+    
+    # Disconnect services
     try:
         await asterisk_service.disconnect()
         logger.info("Disconnected from Asterisk ARI")
+    except Exception:
+        pass
+    
+    try:
+        await close_redis_service()
+        logger.info("Disconnected from Redis")
     except Exception:
         pass
 
@@ -284,11 +237,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="API REST for Contact Center with Asterisk - Outbound Call",
+    description="Production-Ready Contact Center API with Asterisk ARI",
     docs_url=("/docs" if settings.docs_enabled else None),
     redoc_url=("/redoc" if settings.docs_enabled else None),
     lifespan=lifespan,
 )
+
+# Setup OpenTelemetry tracing
+setup_tracing(app)
 
 # Configure CORS
 app.add_middleware(
@@ -299,7 +255,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Additional middleware
+# Additional middleware (order matters - first added = outermost = executed first)
 from starlette.middleware.gzip import GZipMiddleware
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -308,7 +264,10 @@ app.add_middleware(RequestSizeLimitMiddleware, max_size=1_000_000)
 # Logging middleware (structured JSON)
 app.add_middleware(JSONLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)
-app.add_middleware(SimpleRateLimitMiddleware)
+
+# Distributed rate limiting (replaces in-memory version)
+app.add_middleware(DistributedRateLimitMiddleware)
+app.add_middleware(BruteForceProtectionMiddleware)
 
 # Include routes
 app.include_router(interaction.router, prefix="/api/v1", tags=["Interaction"])
@@ -326,8 +285,9 @@ async def root():
     return {
         "message": "Contact Center API",
         "version": settings.app_version,
-        "docs": "/docs",
+        "docs": "/docs" if settings.docs_enabled else "disabled",
         "health": "/health",
+        "readiness": "/readiness",
         "auth_token": "/api/v1/token"
     }
 
@@ -349,18 +309,42 @@ async def health_check(
     ws_ok = asterisk_service._ws_connected
     asterisk_status = "ok" if http_ok and ws_ok else "degraded"
     
+    # Check Redis
+    redis_status = "ok"
+    try:
+        redis = await get_redis_service()
+        if not await redis.is_connected():
+            redis_status = "degraded"
+    except Exception as e:
+        redis_status = f"error: {str(e)[:30]}"
+    
     # Update metrics
     track_ari_connection(http_ok, ws_ok)
     
+    # Get circuit breaker state
+    circuit_state = {}
+    if settings.circuit_breaker_enabled:
+        try:
+            cb = await get_asterisk_with_circuit_breaker()
+            circuit_state = cb.get_state()
+        except Exception:
+            pass
+    
     return {
-        "status": "ok" if db_status in ("ok", "disabled") and asterisk_status == "ok" else "degraded",
+        "status": "ok" if all([
+            db_status in ("ok", "disabled"),
+            asterisk_status == "ok",
+            redis_status == "ok"
+        ]) else "degraded",
         "version": settings.app_version,
         "database": db_status,
+        "redis": redis_status,
         "asterisk": {
             "status": asterisk_status,
             "http": "connected" if http_ok else "disconnected",
             "websocket": "connected" if ws_ok else "disconnected"
-        }
+        },
+        "circuit_breakers": circuit_state if settings.circuit_breaker_enabled else "disabled"
     }
 
 
@@ -384,7 +368,19 @@ async def readiness(
     else:
         checks["database"] = "disabled"
     
-    # Asterisk HTTP
+    # Redis
+    try:
+        redis = await get_redis_service()
+        if await redis.is_connected():
+            checks["redis"] = "ready"
+        else:
+            checks["redis"] = "not_connected"
+            ready = False
+    except Exception as e:
+        checks["redis"] = f"error: {str(e)[:30]}"
+        ready = False
+    
+    # Asterisk HTTP (required)
     if asterisk_service._connected_ok:
         checks["asterisk_http"] = "ready"
     else:
@@ -412,4 +408,3 @@ if __name__ == "__main__":
         reload=settings.debug,
         log_level=settings.log_level.lower()
     )
-    

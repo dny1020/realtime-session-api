@@ -1,5 +1,3 @@
-
-
 services:
   # ------------------------------
   # PostgreSQL Database
@@ -13,7 +11,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # NO ports exposed - internal network only
     networks:
       - internal
       - traefik_net
@@ -40,12 +37,12 @@ services:
     restart: unless-stopped
 
   # ------------------------------
-  # Redis - Distributed Locking & Rate Limiting
+  # Redis - Distributed Locking & Rate Limiting & Celery Broker
   # ------------------------------
   redis:
     image: redis:7-alpine
     container_name: contactcenter_redis
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly yes
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
     volumes:
       - redis_data:/data
     networks:
@@ -61,22 +58,18 @@ services:
       resources:
         limits:
           cpus: '1'
-          memory: 256M
+          memory: 512M
         reservations:
           cpus: '0.1'
-          memory: 64M
+          memory: 128M
     restart: unless-stopped
 
   # ------------------------------
   # FastAPI - Contact Center API
   # ------------------------------
-  # NOTE: Asterisk service is deployed separately as an external service.
-  # Ensure ARI_HTTP_URL points to your Asterisk server.
-  # ------------------------------
   api:
     build: .
     container_name: contactcenter_api
-    # NO ports exposed - access only through Traefik
     environment:
       - APP_NAME=${APP_NAME:-Contact Center API}
       - APP_VERSION=${APP_VERSION:-1.0.0}
@@ -85,6 +78,7 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - DATABASE_URL=${DATABASE_URL}
       - DISABLE_DB=${DISABLE_DB:-false}
+      - REDIS_URL=redis://redis:6379/0
       - ARI_HTTP_URL=${ARI_HTTP_URL}
       - ARI_USERNAME=${ARI_USERNAME}
       - ARI_PASSWORD=${ARI_PASSWORD}
@@ -96,12 +90,16 @@ services:
       - DEFAULT_CALLER_ID=${DEFAULT_CALLER_ID:-Outbound Call}
       - ALGORITHM=${ALGORITHM:-HS256}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       - JWT_ISSUER=${JWT_ISSUER:-}
       - JWT_AUDIENCE=${JWT_AUDIENCE:-}
       - DOCS_ENABLED=${DOCS_ENABLED:-false}
       - METRICS_ENABLED=${METRICS_ENABLED:-true}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CIRCUIT_BREAKER_ENABLED=${CIRCUIT_BREAKER_ENABLED:-true}
+      - CACHE_ENABLED=${CACHE_ENABLED:-true}
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_ENDPOINT=${OTEL_ENDPOINT:-}
       - PYTHONUNBUFFERED=1
       - TZ=${TZ:-UTC}
     labels:
@@ -118,7 +116,7 @@ services:
       - "traefik.http.routers.contactcenter-api.entrypoints=websecure"
       - "traefik.http.routers.contactcenter-api.tls=true"
       - "traefik.http.routers.contactcenter-api.tls.certresolver=myresolver"
-      - "traefik.http.routers.contactcenter-api.middlewares=security-headers,rate-limit"
+      - "traefik.http.routers.contactcenter-api.middlewares=security-headers"
       
       # Service Configuration
       - "traefik.http.services.contactcenter-api.loadbalancer.server.port=8000"
@@ -139,11 +137,6 @@ services:
       - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
       - "traefik.http.middlewares.security-headers.headers.stsPreload=true"
       - "traefik.http.middlewares.security-headers.headers.customResponseHeaders.X-Robots-Tag=noindex,nofollow"
-      
-      # Rate Limiting
-      - "traefik.http.middlewares.rate-limit.ratelimit.average=100"
-      - "traefik.http.middlewares.rate-limit.ratelimit.burst=50"
-      - "traefik.http.middlewares.rate-limit.ratelimit.period=1s"
       
     depends_on:
       postgres:
@@ -174,6 +167,102 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # ------------------------------
+  # Celery Worker - Async Task Processing
+  # ------------------------------
+  celery_worker:
+    build: .
+    container_name: contactcenter_celery_worker
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4 -Q default,retry,maintenance
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - ARI_HTTP_URL=${ARI_HTTP_URL}
+      - ARI_USERNAME=${ARI_USERNAME}
+      - ARI_PASSWORD=${ARI_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # ------------------------------
+  # Celery Beat - Task Scheduler
+  # ------------------------------
+  celery_beat:
+    build: .
+    container_name: contactcenter_celery_beat
+    command: celery -A app.celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - redis
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # ------------------------------
+  # Flower - Celery Monitoring (Optional)
+  # ------------------------------
+  flower:
+    build: .
+    container_name: contactcenter_flower
+    command: celery -A app.celery_app flower --port=5555 --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-change_me}
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - redis
+      - celery_worker
+    ports:
+      - "5555:5555"  # Access at http://localhost:5555
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    profiles:
+      - monitoring  # Only start with: docker-compose --profile monitoring up
 
 volumes:
   postgres_data:

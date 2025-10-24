@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, Text, Enum as SQLEnum, Index, CheckConstraint
 from sqlalchemy.sql import func
+from sqlalchemy.orm import validates
 
 from . import Base, CallStatus
 
@@ -9,6 +10,7 @@ class Call(Base):
     __table_args__ = (
         Index("ix_calls_created_at", "created_at"),
         Index("ix_calls_status_created", "status", "created_at"),
+        Index("ix_calls_version", "version"),  # Index for optimistic locking
         CheckConstraint("attempt_number >= 1", name="ck_calls_attempt_number_ge_1"),
         CheckConstraint("timeout > 0", name="ck_calls_timeout_pos"),
         CheckConstraint(
@@ -19,6 +21,9 @@ class Call(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     call_id = Column(String(255), unique=True, index=True, nullable=False)
+    
+    # Optimistic locking version
+    version = Column(Integer, default=0, nullable=False)
     
     # Call details
     phone_number = Column(String(20), nullable=False, index=True)
@@ -53,7 +58,7 @@ class Call(Base):
     call_metadata = Column(Text, nullable=True)
 
     def __repr__(self):
-        return f"<Call(id={self.id}, phone_number='{self.phone_number}', status='{self.status}')>"
+        return f"<Call(id={self.id}, phone_number='{self.phone_number}', status='{self.status}', version={self.version})>"
     
     @property
     def is_active(self):
@@ -65,3 +70,11 @@ class Call(Base):
         """Return True if the call has ended"""
         return self.status in [CallStatus.ANSWERED, CallStatus.BUSY, CallStatus.NO_ANSWER, 
                               CallStatus.FAILED, CallStatus.COMPLETED]
+    
+    @validates('version')
+    def validate_version(self, key, value):
+        """Ensure version is never decremented"""
+        if hasattr(self, 'version') and self.version is not None:
+            if value < self.version:
+                raise ValueError("Version cannot be decremented")
+        return value
