@@ -3,7 +3,9 @@ Circuit breaker wrapper for Asterisk ARI service
 
 Prevents cascading failures when Asterisk is degraded or down.
 """
-from aiobreaker import CircuitBreaker
+from typing import Optional
+from datetime import timedelta
+from aiobreaker import CircuitBreaker, CircuitBreakerError
 from loguru import logger
 
 from app.services.asterisk import AsteriskService
@@ -13,7 +15,7 @@ class CircuitBreakerConfig:
     """Circuit breaker configuration"""
     FAIL_THRESHOLD = 5  # Open after 5 failures
     SUCCESS_THRESHOLD = 2  # Close after 2 successes
-    TIMEOUT = 60  # Try again after 60 seconds
+    TIMEOUT = timedelta(seconds=60)  # Try again after 60 seconds
     EXPECTED_EXCEPTIONS = (Exception,)  # All exceptions count as failures
 
 
@@ -34,24 +36,14 @@ class AsteriskCircuitBreaker:
         self.originate_breaker = CircuitBreaker(
             fail_max=CircuitBreakerConfig.FAIL_THRESHOLD,
             timeout_duration=CircuitBreakerConfig.TIMEOUT,
-            recovery_timeout=CircuitBreakerConfig.SUCCESS_THRESHOLD,
-            expected_exception=CircuitBreakerConfig.EXPECTED_EXCEPTIONS,
             name="asterisk_originate"
         )
         
         self.hangup_breaker = CircuitBreaker(
             fail_max=CircuitBreakerConfig.FAIL_THRESHOLD,
             timeout_duration=CircuitBreakerConfig.TIMEOUT,
-            recovery_timeout=CircuitBreakerConfig.SUCCESS_THRESHOLD,
-            expected_exception=CircuitBreakerConfig.EXPECTED_EXCEPTIONS,
             name="asterisk_hangup"
         )
-        
-        # Register listeners for state changes
-        self.originate_breaker.add_listener(self._on_breaker_open)
-        self.originate_breaker.add_listener(self._on_breaker_close)
-        self.hangup_breaker.add_listener(self._on_breaker_open)
-        self.hangup_breaker.add_listener(self._on_breaker_close)
     
     def _on_breaker_open(self, breaker: CircuitBreaker):
         """Called when circuit opens (too many failures)"""
@@ -79,9 +71,10 @@ class AsteriskCircuitBreaker:
                 *args,
                 **kwargs
             )
-        except Exception as e:
+        except CircuitBreakerError as e:
+            # Circuit is open - service is degraded
             logger.error(
-                "Circuit breaker prevented call origination",
+                "Circuit breaker OPEN - preventing call origination",
                 extra={
                     "state": self.originate_breaker.current_state,
                     "error": str(e)
@@ -94,6 +87,17 @@ class AsteriskCircuitBreaker:
                 "error": "Service temporarily unavailable",
                 "details": "Asterisk service is degraded, please try again later"
             }
+        except Exception as e:
+            # Other exceptions - let circuit breaker track and re-raise
+            logger.error(
+                "Call origination failed",
+                extra={
+                    "state": self.originate_breaker.current_state,
+                    "error": str(e)
+                }
+            )
+            # Return error response but let exception propagate for circuit breaker
+            raise
     
     async def hangup_channel(self, *args, **kwargs):
         """

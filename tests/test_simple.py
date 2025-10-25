@@ -13,7 +13,7 @@ def test_import_settings():
     from config.settings import get_settings
     settings = get_settings()
     assert settings is not None
-    assert settings.secret_key == "test-secret-key-for-testing-only"
+    assert settings.secret_key == "test-secret-key-minimum-32-characters-long-for-testing"
 
 
 def test_import_asterisk_service():

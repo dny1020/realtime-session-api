@@ -7,16 +7,9 @@ from unittest.mock import patch, AsyncMock
 @pytest.fixture
 def client():
     """Create test client with mocked services"""
-    # Mock Redis before importing app
-    mock_redis = AsyncMock()
-    mock_redis.is_connected.return_value = True
-    mock_redis.check_rate_limit.return_value = (True, 10)
-    mock_redis.is_token_blacklisted.return_value = False
-    
-    with patch('app.services.redis_service.get_redis_service', return_value=mock_redis), \
-         patch('app.middleware.rate_limit.get_redis_service', return_value=mock_redis):
-        from app.main import app
-        return TestClient(app)
+    # The conftest.py already mocks the services via autouse fixture
+    from app.main import app
+    return TestClient(app)
 
 
 def test_root_endpoint(client):

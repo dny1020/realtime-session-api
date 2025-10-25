@@ -35,6 +35,9 @@ def mock_redis():
     mock.track_failed_login.return_value = 0
     mock.get.return_value = None
     mock.set.return_value = True
+    mock.exists.return_value = False  # No lockout
+    mock._client = AsyncMock()
+    mock._client.ttl.return_value = 0
     return mock
 
 
